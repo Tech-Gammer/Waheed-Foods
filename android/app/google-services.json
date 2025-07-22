@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "703177151510",
+    "project_id": "waheed-foods",
+    "storage_bucket": "waheed-foods.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:703177151510:android:f88e50a985d1c0f5411137",
+        "android_client_info": {
+          "package_name": "com.example.waheed_foods"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCqmqe5uo3TcxKLymYnw3uPEEtqSmCpZ44"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
