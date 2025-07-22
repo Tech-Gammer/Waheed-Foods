@@ -7,11 +7,13 @@ import 'package:waheed_foods/userspage.dart';
 import 'package:waheed_foods/vendors/vendorchequepage.dart';
 import 'package:waheed_foods/vendors/viewvendors.dart';
 import 'Auth/login.dart';
+import 'Category/categorymanagement.dart';
 import 'Customer/customerlist.dart';
 import 'DailyExpensesPages/viewexpensepage.dart';
 import 'Employee/employeelist.dart';
 import 'Filled/filledlist.dart';
 import 'Filled/quotationlistpage.dart';
+import 'Purchase/Purchase Order page.dart';
 import 'Reminders/reminderslistpage.dart';
 import 'Provider/lanprovider.dart';
 import 'Reports/ledgerselcttion.dart';
@@ -146,6 +148,8 @@ class _DashboardState extends State<Dashboard> {
           _sidebarItem(Icons.home, 'Home', 'ہوم', () => _navigateTo(context, const Dashboard()), languageProvider),
           _sidebarItem(Icons.notifications, 'Reminders', 'یاددہانی', () => _navigateTo(context, const ReminderListPage()), languageProvider),
           _sidebarItem(Icons.list, 'Items List', 'ٹوٹل آئٹمز', () => _navigateTo(context, ItemsListPage()), languageProvider),
+          _sidebarItem(Icons.shopping_cart, 'Category management', 'کیٹاگوری منیجمنٹ', () => _navigateTo(context, CategoryManagement()), languageProvider),
+          _sidebarItem(Icons.shopping_cart, 'Purchase Order', 'خریداری کا آرڈر', () => _navigateTo(context, PurchaseOrderPage()), languageProvider),
           _sidebarItem(Icons.shopping_cart, 'Purchase', 'خریداری', () => _navigateTo(context, PurchaseListPage()), languageProvider),
           _sidebarItem(Icons.store, 'Vendors', 'بیچنے والا', () => _navigateTo(context, const ViewVendorsPage()), languageProvider),
           _sidebarItem(Icons.account_balance_wallet, 'Transactions', 'لین دین', () => _navigateTo(context, const LedgerSelection()), languageProvider),

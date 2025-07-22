@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
@@ -10,9 +11,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
-import 'package:waheed_foods/items/stockreportpage.dart';
 import 'dart:ui' as ui;
-import 'editphysicalqty.dart';
 import '../Provider/lanprovider.dart';
 import 'AddItems.dart';
 
@@ -26,10 +25,16 @@ class _ItemsListPageState extends State<ItemsListPage> {
   List<Map<String, dynamic>> _items = [];
   List<Map<String, dynamic>> _filteredItems = [];
   final TextEditingController _searchController = TextEditingController();
+  Map<String, dynamic>? _selectedItem;
 
   String? _savedPdfPath;
-  Uint8List? _pdfBytes; // for web share
+  Uint8List? _pdfBytes;
   Map<String, String> customerIdNameMap = {};
+  final Color _primaryColor = Color(0xFFFF8A65);
+  final Color _secondaryColor = Color(0xFFFFB74D);
+  final Color _backgroundColor = Colors.grey[50]!;
+  final Color _cardColor = Colors.white;
+  final Color _textColor = Colors.grey[800]!;
 
   Future<void> _fetchCustomerNames() async {
     final snapshot = await FirebaseDatabase.instance.ref('customers').get();
@@ -255,14 +260,17 @@ class _ItemsListPageState extends State<ItemsListPage> {
           itemData: {
             'key': item['key'],
             'itemName': item['itemName'],
-            'unit': item['unit'],
-            'costPrice': item['costPrice'],
-            'salePrice': item['salePrice'],
-            'qtyOnHand': item['qtyOnHand'],
-            'vendor': item['vendor'],
-            'category': item['category'],
-            'weightPerBag': item['weightPerBag'],
-            'customerBasePrices': item['customerBasePrices'], // Add this line
+            'image': item['image'],
+            'unit': item['unit'] ?? '', // Handle null for BOM
+            'costPrice': item['costPrice'] ?? 0.0, // Handle null for BOM
+            'salePrice': item['salePrice'] ?? 0.0,
+            'qtyOnHand': item['qtyOnHand'] ?? 0,
+            'vendor': item['vendor'] ?? '', // Handle null for BOM
+            'category': item['category'] ?? '', // Handle null for BOM
+            'weightPerBag': item['weightPerBag'] ?? 1.0,
+            'customerBasePrices': item['customerBasePrices'], // May be null for BOM
+            'isBOM': item['isBOM'] ?? false, // Add this field
+            'components': item['components'], // For BOM items
           },
         ),
       ),
@@ -318,111 +326,456 @@ class _ItemsListPageState extends State<ItemsListPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-          flexibleSpace: Container(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                colors: [Color(0xFFFF8A65), Color(0xFFFFB74D)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-            ),
-          ),
-        title: Text("Items List"),
+        title: Text('Inventory Information'),
         actions: [
-          IconButton(
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => RegisterItemPage()),
-              );
-            },
-            icon: Icon(Icons.add,color: Colors.white,),
-          ),
-          IconButton(
-            icon: Icon(Icons.picture_as_pdf, color: Colors.white),
-            onPressed: _createPDFAndSave, // Generate PDF
-          ),
-          IconButton(
-            icon: Icon(Icons.share, color: Colors.white),
-            onPressed: _sharePDF, // Share PDF
-          ),
-
-          IconButton(
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => StockReportPage()),
-              );
-            },
-            icon: Icon(Icons.history, color: Colors.white),
-          ),
-
+          IconButton(icon: Icon(Icons.picture_as_pdf), onPressed: _createPDFAndSave),
+          IconButton(icon: Icon(Icons.share), onPressed: _sharePDF),
         ],
-
-      ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: TextField(
-              controller: _searchController,
-              decoration: InputDecoration(
-                labelText: 'Search Item',
-                prefixIcon: Icon(Icons.search),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-              ),
+        flexibleSpace: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [_primaryColor, _secondaryColor],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
             ),
           ),
-          Expanded(
-            child: _filteredItems.isEmpty
-                ? Center(child: Text('No items found'))
-                : ListView.builder(
-              itemCount: _filteredItems.length,
-              itemBuilder: (context, index) {
-                final item = _filteredItems[index];
-                return Card(
-                  margin: EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  child: ListTile(
-                    title: Text(item['itemName']),
-                    subtitle: Text("Qty: ${item['qtyOnHand']}, Price: ${item['salePrice']}"),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          icon: Icon(Icons.people, color: Colors.purple),
-                          onPressed: () => _showCustomerRates(item),
+        ),
+      ),
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [_backgroundColor.withOpacity(0.9), _backgroundColor],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+          ),
+        ),
+        child: Row(
+          children: [
+            /// Left Panel - Item List
+            Expanded(
+              flex: 2,
+              child: Card(
+                margin: EdgeInsets.all(8),
+                elevation: 4,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  children: [
+                    Padding(
+                      padding: EdgeInsets.all(12),
+                      child: TextField(
+                        controller: _searchController,
+                        decoration: InputDecoration(
+                          labelText: 'Search Item',
+                          prefixIcon: Icon(Icons.search),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          filled: true,
+                          fillColor: _cardColor,
                         ),
-                        IconButton(
-                          icon: Icon(Icons.edit, color: Colors.blue,),
-                          onPressed: () => updateItem(item),
-                        ),
-                        IconButton(
-                          icon: Icon(Icons.delete, color: Colors.red),
-                          // onPressed: () => deleteItem(item['key']),
-                          onPressed: () => _confirmDelete(item['key']), // Changed to confirmation dialog
-                        ),
-                  IconButton(
-                          icon: Icon(Icons.edit_note, color: Colors.blue),
-                          onPressed: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => EditQtyPage(itemData: item),
+                      ),
+                    ),
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: _filteredItems.length,
+                        itemBuilder: (context, index) {
+                          final item = _filteredItems[index];
+                          return Card(
+                            margin: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            elevation: 2,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
                             ),
+                            child: ListTile(
+                              title: Text(item['itemName'],
+                                  style: TextStyle(color: _textColor, fontWeight: FontWeight.bold)),
+                              subtitle: Text("Price: ${item['salePrice']}",
+                                  style: TextStyle(color: _textColor.withOpacity(0.7))),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(
+                                    icon: Icon(Icons.edit, color: _primaryColor),
+                                    onPressed: () => updateItem(item),
+                                  ),
+                                  IconButton(
+                                    icon: Icon(Icons.delete, color: Colors.red),
+                                    onPressed: () => _confirmDelete(item['key']),
+                                  ),
+                                ],
+                              ),
+                              onTap: () {
+                                setState(() {
+                                  _selectedItem = item;
+                                });
+                              },
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            /// Center Panel - Item Detail
+            Expanded(
+              flex: 3,
+              child: _selectedItem == null
+                  ? Center(
+                child: Card(
+                  elevation: 4,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Text("Select an item to view details",
+                        style: TextStyle(color: _textColor)),
+                  ),
+                ),
+              )
+                  : Card(
+                margin: EdgeInsets.all(8),
+                elevation: 4,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                    Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text("Inventory Information",
+                          style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                              color: _primaryColor,
+                              fontWeight: FontWeight.bold
+                          )),
+                      if (_selectedItem!['isBOM'] == true)
+                        Chip(
+                          label: Text("BOM"),
+                          backgroundColor: Colors.blue[100],
+                        ),
+                      IconButton(
+                        icon: Icon(Icons.attach_money, color: _secondaryColor),
+                        onPressed: () => _showCustomerRates(_selectedItem!),
+                      ),
+                    ],
+                  ),
+                  Divider(color: _primaryColor.withOpacity(0.3)),
+                  SizedBox(height: 16),
+                      _buildDetailRow("Item Name", _selectedItem!['itemName']?.toString() ?? 'N/A'),
+                      if (_selectedItem!['isBOM'] != true) ...[
+                        _buildDetailRow("Cost Price", _selectedItem!['costPrice']?.toString() ?? 'N/A'),
+                        _buildDetailRow("Unit", _selectedItem!['unit']?.toString() ?? 'N/A'),
+                        _buildDetailRow("Vendor", _selectedItem!['vendor']?.toString() ?? 'N/A'),
+                      ],
+                      _buildDetailRow("Sale Price", _selectedItem!['salePrice']?.toString() ?? 'N/A'),
+                      _buildDetailRow("Quantity", _selectedItem!['qtyOnHand']?.toString() ?? 'N/A'),
+                      _buildDetailRow("Category", _selectedItem!['category']?.toString() ?? 'N/A'),
+                      if (_selectedItem!['isBOM'] == true) ...[
+                        SizedBox(height: 16),
+                        Text("Components:",
+                            style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                                color: _primaryColor)),
+                        SizedBox(height: 8),
+                        Container(
+                          height: 350, // Fixed height for the components list
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.grey[300]!),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: _selectedItem!['components'] == null
+                              ? Center(child: Text("No components"))
+                              : ListView.builder(
+                            padding: EdgeInsets.all(8),
+                            itemCount: _selectedItem!['components'].length,
+                            itemBuilder: (context, index) {
+                              final component = _selectedItem!['components'][index];
+                              return Card(
+                                margin: EdgeInsets.symmetric(vertical: 4),
+                                elevation: 2,
+                                child: ListTile(
+                                  contentPadding: EdgeInsets.symmetric(horizontal: 12),
+                                  title: Text(component['name'] ?? 'Unnamed component'),
+                                  subtitle: Text(
+                                      '${component['quantity']} ${component['unit']}'),
+                                  trailing: Text(
+                                      '${(component['price'] * component['quantity']).toStringAsFixed(2)} PKR'),
+                                ),
+                              );
+                            },
                           ),
                         ),
                       ],
-                    ),
+                  Spacer(),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _primaryColor,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        child: Text("Edit", style: TextStyle(color: Colors.white)),
+                        onPressed: () => updateItem(_selectedItem!),
+                      ),
+                        SizedBox(width: 10),
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                          child: Text("Delete", style: TextStyle(color: Colors.white)),
+                          onPressed: () => _confirmDelete(_selectedItem!['key']),
+                        ),
+                        ],
+                      ),
+                    ],
                   ),
-                );
-              },
+                ),
+              ),
             ),
+
+
+            /// Right Panel (Optional) – Image, etc.
+        Expanded(
+          flex: 2,
+          child: Card(
+              margin: EdgeInsets.all(8),
+              elevation: 4,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                  Text("Item Image",
+                  style: TextStyle(
+                      color: _primaryColor,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 18
+                  )),
+              SizedBox(height: 20),
+              GestureDetector(
+                onTap: () {
+                  if (_selectedItem != null && _selectedItem!['image'] != null) {
+                    _showImagePreview(context, _selectedItem!['image']);
+                  }
+                },
+                child: Container(
+                  width: 150,
+                  height: 150,
+                  decoration: BoxDecoration(
+                    color: _cardColor,
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.grey.withOpacity(0.3),
+                        blurRadius: 5,
+                        spreadRadius: 2,
+                      )
+                    ],
+                    image: _selectedItem != null && _selectedItem!['image'] != null
+                        ? DecorationImage(
+                      image: MemoryImage(base64Decode(_selectedItem!['image'])),
+                      fit: BoxFit.cover,
+                    )
+                        : null,
+                  ),
+                  child: Icon(Icons.image, size: 60, color: _secondaryColor),
+                ),
+              ),
+              SizedBox(height: 20),
+              if (_selectedItem != null) ...[
+          _buildStatCard("Stock Value",
+          "₹${(double.parse(_selectedItem!['qtyOnHand'].toString()) * double.parse(_selectedItem!['salePrice'].toString()))}"),
+          SizedBox(height: 10),
+          _buildStatCard("Profit Margin", "30%"), // Example value
+          ],
+          ],
+        ),
+      ),
+    ),
+
+
+
+          ],
+        ),
+      ),
+
+      /// Bottom Panel – Transactions
+      bottomNavigationBar: Container(
+        decoration: BoxDecoration(
+          color: _cardColor,
+          borderRadius: BorderRadius.only(
+            topLeft: Radius.circular(12),
+            topRight: Radius.circular(12),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.grey.withOpacity(0.2),
+              blurRadius: 8,
+              spreadRadius: 2,
+            )
+          ],
+        ),
+        padding: EdgeInsets.all(12),
+        height: 150,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text("Recent Transactions",
+                    style: TextStyle(
+                        color: _primaryColor,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16
+                    )),
+                Spacer(),
+                Icon(Icons.history, color: _secondaryColor),
+              ],
+            ),
+            Divider(color: _primaryColor.withOpacity(0.3)),
+            Expanded(
+              child: Center(
+                child: Text(
+                  "No recent transactions available",
+                  style: TextStyle(color: _textColor.withOpacity(0.6)),
+                ),
+              ),
+            )
+          ],
+        ),
+      ),
+
+      floatingActionButton: FloatingActionButton(
+        backgroundColor: _primaryColor,
+        child: Icon(Icons.add, color: Colors.white),
+        onPressed: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (context) => RegisterItemPage()),
+          ).then((_) => fetchItems());
+        },
+      ),
+
+
+
+    );
+  }
+
+  void _showImagePreview(BuildContext context, String imageBase64) {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: EdgeInsets.all(20),
+        child: Stack(
+          children: [
+            InteractiveViewer(
+              panEnabled: true,
+              minScale: 0.5,
+              maxScale: 4,
+              child: kIsWeb
+                  ? Image.network('data:image/png;base64,$imageBase64')
+                  : Image.memory(base64Decode(imageBase64)),
+            ),
+            Positioned(
+              top: 10,
+              right: 10,
+              child: IconButton(
+                icon: Icon(Icons.close, color: Colors.white, size: 30),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatCard(String title, String value) {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Padding(
+        padding: EdgeInsets.all(12),
+        child: Column(
+          children: [
+            Text(title,
+                style: TextStyle(
+                    color: _textColor.withOpacity(0.7),
+                    fontSize: 14
+                )),
+            SizedBox(height: 5),
+            Text(value,
+                style: TextStyle(
+                    color: _primaryColor,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 18
+                )),
+          ],
+        ),
+      ),
+    );
+  }
+
+
+  Widget _buildDetailRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 120,
+            child: Text(label,
+                style: TextStyle(
+                    color: _textColor,
+                    fontWeight: FontWeight.bold
+                )),
+          ),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text(value.isNotEmpty ? value : 'N/A',
+                style: TextStyle(
+                  color: _textColor.withOpacity(0.8),
+                )),
           ),
         ],
       ),
     );
-  }//s
+  }
+
 
   void _showCustomerRates(Map<String, dynamic> item) {
+
+
+    if (item['isBOM'] == true) {
+      final languageProvider = Provider.of<LanguageProvider>(context, listen: false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(languageProvider.isEnglish
+            ? "BOM items don't have customer prices"
+            : "BOM آئٹمز میں کسٹمر قیمتیں نہیں ہوتیں")),
+      );
+      return;
+    }
     // Safely get and convert customerBasePrices
     final rawPrices = item['customerBasePrices'];
     final Map<String, dynamic> customerPrices = {};
