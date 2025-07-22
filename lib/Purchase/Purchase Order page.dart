@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -32,6 +34,11 @@ class _PurchaseOrderPageState extends State<PurchaseOrderPage> {
   void initState() {
     super.initState();
     _poNumberController.text = 'PO-${DateTime.now().millisecondsSinceEpoch.toString().substring(5)}';
+
+    // Add listeners to tax and discount controllers
+    _taxController.addListener(_calculateTotals);
+    _discountController.addListener(_calculateTotals);
+
     _loadItems();
   }
 
@@ -66,6 +73,8 @@ class _PurchaseOrderPageState extends State<PurchaseOrderPage> {
               'category': item['category'] ?? 'Uncategorized',
               'weightPerBag': item['weightPerBag']?.toDouble() ?? 0.0,
               'isBOW': item['isBOW'] ?? false,
+              'image': item['image'] ?? '', // Add this line to get the image URL
+
             };
           }).toList();
         });
@@ -122,14 +131,22 @@ class _PurchaseOrderPageState extends State<PurchaseOrderPage> {
   }
 
   void _calculateTotals() {
+    // Calculate subtotal
     _subtotal = _selectedItems.fold(0.0, (sum, item) => sum + item['total']);
 
+    // Parse tax and discount values
     final taxValue = double.tryParse(_taxController.text) ?? 0;
     final discountValue = double.tryParse(_discountController.text) ?? 0;
 
+    // Calculate tax based on mode
     _tax = _taxInPercentage ? (_subtotal * taxValue / 100) : taxValue;
-    final discount = _discountInPercentage ? (_subtotal * discountValue / 100) : discountValue;
 
+    // Calculate discount based on mode
+    final discount = _discountInPercentage
+        ? (_subtotal * discountValue / 100)
+        : discountValue;
+
+    // Calculate final total
     _total = _subtotal + _tax - discount;
   }
 
@@ -272,8 +289,12 @@ class _PurchaseOrderPageState extends State<PurchaseOrderPage> {
               if (_selectedItems.isNotEmpty) _buildSelectedItemsSection(),
               const SizedBox(height: 24),
               if (_selectedItems.isNotEmpty) _buildTotalsSection(),
-              const SizedBox(height: 24),
-              _buildSaveButton(),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _buildSaveButton(),
+                ],
+              ),
             ],
           ),
         ),
@@ -414,6 +435,93 @@ class _PurchaseOrderPageState extends State<PurchaseOrderPage> {
   }
 
   Widget _buildItemsSection() {
+    TextEditingController _searchController = TextEditingController();
+    List<Map<String, dynamic>> _filteredItems = [..._items];
+
+    void _filterItems(String query) {
+      setState(() {
+        _filteredItems = _items.where((item) {
+          final name = item['name'].toString().toLowerCase();
+          final searchLower = query.toLowerCase();
+          return name.contains(searchLower);
+        }).toList();
+      });
+    }
+
+    Future<void> _showAllItemsDialog(BuildContext context) async {
+      TextEditingController dialogSearchController = TextEditingController();
+      List<Map<String, dynamic>> dialogFilteredItems = [..._items];
+
+      void filterDialogItems(String query) {
+        setState(() {
+          dialogFilteredItems = _items.where((item) {
+            final name = item['name'].toString().toLowerCase();
+            final searchLower = query.toLowerCase();
+            return name.contains(searchLower);
+          }).toList();
+        });
+      }
+
+      return showDialog(
+        context: context,
+        builder: (context) {
+          return StatefulBuilder(
+            builder: (context, setState) {
+              return AlertDialog(
+                title: Text('Select Items'),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: dialogSearchController,
+                      decoration: InputDecoration(
+                        labelText: 'Search items',
+                        prefixIcon: Icon(Icons.search),
+                        border: OutlineInputBorder(),
+                      ),
+                      onChanged: filterDialogItems,
+                    ),
+                    SizedBox(height: 16),
+                    Container(
+                      height: MediaQuery.of(context).size.height * 0.5,
+                      width: MediaQuery.of(context).size.width * 0.8,
+                      child: ListView.builder(
+                        itemCount: dialogFilteredItems.length,
+                        itemBuilder: (context, index) {
+                          final item = dialogFilteredItems[index];
+                          return Card(
+                            margin: EdgeInsets.symmetric(vertical: 4),
+                            child: ListTile(
+                              leading: _buildItemImage(item['image']),
+                              title: Text(item['name']),
+                              subtitle: Text('${item['price']} PKR/${item['unit']}'),
+                              trailing: IconButton(
+                                icon: Icon(Icons.add, color: Colors.green),
+                                onPressed: () {
+                                  _addItem(item);
+                                  Navigator.pop(context);
+                                },
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: Text('Close'),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+    }
+
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -439,18 +547,22 @@ class _PurchaseOrderPageState extends State<PurchaseOrderPage> {
                     ),
                   ],
                 ),
-                ElevatedButton.icon(
-                  onPressed: () => _addNewRow(),
-                  icon: const Icon(Icons.add, size: 18),
-                  label: Text('Add Item'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green[600],
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  ),
-                ),
               ],
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                labelText: 'Search items',
+                prefixIcon: Icon(Icons.search),
+                suffixIcon: IconButton(
+                  icon: Icon(Icons.list),
+                  onPressed: () => _showAllItemsDialog(context),
+                  tooltip: 'View all items',
+                ),
+                border: OutlineInputBorder(),
+              ),
+              onChanged: _filterItems,
             ),
             const SizedBox(height: 16),
             if (_items.isEmpty)
@@ -474,11 +586,19 @@ class _PurchaseOrderPageState extends State<PurchaseOrderPage> {
                   border: Border.all(color: Colors.grey[300]!),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: ListView.builder(
-                  itemCount: _items.length,
+                child: _filteredItems.isEmpty
+                    ? Center(
+                  child: Text(
+                    'No items found',
+                    style: TextStyle(color: Colors.grey[600]),
+                  ),
+                )
+                    : ListView.builder(
+                  itemCount: _filteredItems.length,
                   itemBuilder: (context, index) {
-                    final item = _items[index];
+                    final item = _filteredItems[index];
                     return ListTile(
+                      leading: _buildItemImage(item['image']),
                       title: Text(item['name']),
                       subtitle: Text('${item['price']} PKR/${item['unit']}'),
                       trailing: IconButton(
@@ -495,9 +615,45 @@ class _PurchaseOrderPageState extends State<PurchaseOrderPage> {
     );
   }
 
-  void _addNewRow() {
-    if (_items.isNotEmpty) {
-      _addItem(_items.first);
+  Widget _buildItemImage(String? imageData) {
+    return Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        color: Colors.grey[200],
+      ),
+      child: (imageData != null && imageData.isNotEmpty)
+          ? ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: _buildImageFromBase64(imageData),
+      )
+          : Icon(Icons.image, color: Colors.grey),
+    );
+  }
+
+  Widget _buildImageFromBase64(String base64String) {
+    try {
+      // Check if the string is a URL or Base64
+      if (base64String.startsWith('http') || base64String.startsWith('https')) {
+        return Image.network(
+          base64String,
+          fit: BoxFit.cover,
+          errorBuilder: (context, error, stackTrace) =>
+              Icon(Icons.broken_image, color: Colors.grey),
+        );
+      } else {
+        // Handle Base64 image
+        return Image.memory(
+          base64Decode(base64String),
+          fit: BoxFit.cover,
+          errorBuilder: (context, error, stackTrace) =>
+              Icon(Icons.broken_image, color: Colors.grey),
+        );
+      }
+    } catch (e) {
+      print('Error loading image: $e');
+      return Icon(Icons.broken_image, color: Colors.grey);
     }
   }
 
@@ -576,7 +732,21 @@ class _PurchaseOrderPageState extends State<PurchaseOrderPage> {
                       ],
                     ),
                     const SizedBox(height: 12),
-                    _buildInfoRow('Name:', item['name']),
+                    Row(
+                      children: [
+                        _buildItemImage(item['image']),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _buildInfoRow('Name:', item['name']),
+                              _buildInfoRow('Price:', '${item['price']} PKR/${item['unit']}'),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                     const SizedBox(height: 8),
                     Row(
                       children: [
@@ -656,8 +826,12 @@ class _PurchaseOrderPageState extends State<PurchaseOrderPage> {
                   child: _buildTextField(
                     controller: _taxController,
                     label: _taxInPercentage ? 'Tax (%)' : 'Tax (PKR)',
-                    keyboardType: TextInputType.number,
-                    onChanged: (value) => _calculateTotals(),
+                    keyboardType: TextInputType.numberWithOptions(decimal: true),
+                    onChanged: (value) {
+                      setState(() {
+                        _calculateTotals();
+                      });
+                    },
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -690,8 +864,12 @@ class _PurchaseOrderPageState extends State<PurchaseOrderPage> {
                   child: _buildTextField(
                     controller: _discountController,
                     label: _discountInPercentage ? 'Discount (%)' : 'Discount (PKR)',
-                    keyboardType: TextInputType.number,
-                    onChanged: (value) => _calculateTotals(),
+                    keyboardType: TextInputType.numberWithOptions(decimal: true),
+                    onChanged: (value) {
+                      setState(() {
+                        _calculateTotals();
+                      });
+                    },
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -753,9 +931,9 @@ class _PurchaseOrderPageState extends State<PurchaseOrderPage> {
       onPressed: _isSaving ? null : _savePurchaseOrder,
       style: ElevatedButton.styleFrom(
         backgroundColor: Colors.orange[300],
-        padding: const EdgeInsets.symmetric(vertical: 16),
+        padding: const EdgeInsets.symmetric(vertical: 16,horizontal: 6),
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(8),
         ),
       ),
       child: _isSaving
@@ -860,6 +1038,10 @@ class _PurchaseOrderPageState extends State<PurchaseOrderPage> {
 
   @override
   void dispose() {
+    // Remove listeners when disposing
+    _taxController.removeListener(_calculateTotals);
+    _discountController.removeListener(_calculateTotals);
+
     _poNumberController.dispose();
     _deliveryDateController.dispose();
     _termsController.dispose();
