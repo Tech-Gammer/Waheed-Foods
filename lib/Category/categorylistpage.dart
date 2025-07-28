@@ -15,7 +15,11 @@ class ListCategoriesPage extends StatefulWidget {
 class _ListCategoriesPageState extends State<ListCategoriesPage> {
   final DatabaseReference _database = FirebaseDatabase.instance.ref().child('category');
   final TextEditingController _editController = TextEditingController();
-
+  final Color _primaryColor = Color(0xFFFF8A65);
+  final Color _secondaryColor = Color(0xFFFFB74D);
+  final Color _backgroundColor = Colors.grey[50]!;
+  final Color _cardColor = Colors.white;
+  final Color _textColor = Colors.grey[800]!;
   Future<void> _deleteCategory(String key) async {
     try {
       await _database.child(key).remove();
@@ -116,6 +120,15 @@ class _ListCategoriesPageState extends State<ListCategoriesPage> {
             tooltip: languageProvider.isEnglish ? 'Add New' : 'نیا شامل کریں',
           ),
         ],
+        flexibleSpace: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [_primaryColor, _secondaryColor],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+        ),
       ),
       body: FirebaseAnimatedList(
         query: _database,

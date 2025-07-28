@@ -14,7 +14,11 @@ class _AddCategoryPageState extends State<AddCategoryPage> {
   final _formKey = GlobalKey<FormState>();
   final _categoryNameController = TextEditingController();
   final DatabaseReference _database = FirebaseDatabase.instance.ref().child('category');
-
+  final Color _primaryColor = Color(0xFFFF8A65);
+  final Color _secondaryColor = Color(0xFFFFB74D);
+  final Color _backgroundColor = Colors.grey[50]!;
+  final Color _cardColor = Colors.white;
+  final Color _textColor = Colors.grey[800]!;
   @override
   void dispose() {
     _categoryNameController.dispose();
@@ -58,6 +62,15 @@ class _AddCategoryPageState extends State<AddCategoryPage> {
         title: Text(languageProvider.isEnglish
             ? 'Add New Category'
             : 'نیا زمرہ شامل کریں'),
+        flexibleSpace: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [_primaryColor, _secondaryColor],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+        ),
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),

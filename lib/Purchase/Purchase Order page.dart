@@ -1,251 +1,538 @@
-import 'dart:convert';
-
-import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
+import '../Provider/lanprovider.dart';
+import 'dart:typed_data';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+
 
 class PurchaseOrderPage extends StatefulWidget {
+  final String? orderKey;
+
+  PurchaseOrderPage({this.orderKey});
+
   @override
   _PurchaseOrderPageState createState() => _PurchaseOrderPageState();
 }
 
 class _PurchaseOrderPageState extends State<PurchaseOrderPage> {
   final _formKey = GlobalKey<FormState>();
-  final TextEditingController _poNumberController = TextEditingController();
-  final TextEditingController _deliveryDateController = TextEditingController();
-  final TextEditingController _termsController = TextEditingController();
-  final TextEditingController _notesController = TextEditingController();
-  final TextEditingController _taxController = TextEditingController(text: '0');
-  final TextEditingController _discountController = TextEditingController(text: '0');
+  late DateTime _orderDate;
+  late DateTime _expectedDeliveryDate;
 
-  DateTime _selectedDate = DateTime.now().add(Duration(days: 7));
+  // Controllers
+  late TextEditingController _itemSearchController;
+  late TextEditingController _vendorSearchController;
+  String? _status = 'pending';
+
+  bool _isLoadingItems = false;
+  bool _isLoadingVendors = false;
   List<Map<String, dynamic>> _items = [];
-  List<Map<String, dynamic>> _selectedItems = [];
-  double _subtotal = 0.0;
-  double _tax = 0.0;
-  double _total = 0.0;
-  String? _selectedVendorId;
   List<Map<String, dynamic>> _vendors = [];
-  bool _taxInPercentage = false;
-  bool _discountInPercentage = false;
-  bool _isSaving = false;
+  Map<String, dynamic>? _selectedVendor;
+  bool _isLoadingOrder = false;
+  // List to hold multiple order items
+  List<PurchaseOrderItem> _orderItems = List.generate(3, (index) => PurchaseOrderItem());
+  final TextEditingController _notesController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    _poNumberController.text = 'PO-${DateTime.now().millisecondsSinceEpoch.toString().substring(5)}';
+    _orderDate = DateTime.now();
+    _expectedDeliveryDate = DateTime.now().add(Duration(days: 7));
+    _itemSearchController = TextEditingController();
+    _vendorSearchController = TextEditingController();
 
-    // Add listeners to tax and discount controllers
-    _taxController.addListener(_calculateTotals);
-    _discountController.addListener(_calculateTotals);
-
-    _loadItems();
-  }
-
-  Future<void> _loadItems() async {
-    try {
-      // Fetch vendors
-      final vendorsSnapshot = await FirebaseDatabase.instance.ref('vendors').get();
-      if (vendorsSnapshot.exists) {
-        final vendorsData = vendorsSnapshot.value as Map<dynamic, dynamic>;
-        setState(() {
-          _vendors = vendorsData.entries.map((entry) {
-            return {
-              'id': entry.key,
-              'name': entry.value['name'] ?? 'Unknown Vendor',
-            };
-          }).toList();
-        });
-      }
-
-      // Fetch items
-      final itemsSnapshot = await FirebaseDatabase.instance.ref('items').get();
-      if (itemsSnapshot.exists) {
-        final itemsData = itemsSnapshot.value as Map<dynamic, dynamic>;
-        setState(() {
-          _items = itemsData.entries.map((entry) {
-            final item = entry.value;
-            return {
-              'id': entry.key,
-              'name': item['itemName'] ?? 'No Name',
-              'unit': item['unit'] ?? 'unit',
-              'price': (item['salePrice'] ?? 0).toDouble(),
-              'category': item['category'] ?? 'Uncategorized',
-              'weightPerBag': item['weightPerBag']?.toDouble() ?? 0.0,
-              'isBOW': item['isBOW'] ?? false,
-              'image': item['image'] ?? '', // Add this line to get the image URL
-
-            };
-          }).toList();
-        });
-      }
-    } catch (e) {
-      print('Error loading data: $e');
-      setState(() {
-        _items = [];
-      });
+    // Initialize with 3 empty items for new orders
+    if (widget.orderKey == null) {
+      _orderItems = List.generate(3, (index) => PurchaseOrderItem());
     }
+
+    _loadData();
   }
 
-  Future<void> _selectDate(BuildContext context) async {
-    final DateTime? picked = await showDatePicker(
-      context: context,
-      initialDate: _selectedDate,
-      firstDate: DateTime.now(),
-      lastDate: DateTime(2101),
-    );
-    if (picked != null && picked != _selectedDate) {
-      setState(() {
-        _selectedDate = picked;
-        _deliveryDateController.text = DateFormat('yyyy-MM-dd').format(picked);
-      });
+  Future<void> _loadData() async {
+    await Future.wait([
+      fetchItems(),
+      fetchVendors(),
+    ]);
+
+    // Load existing order if editing - do this after items and vendors are loaded
+    if (widget.orderKey != null) {
+      await fetchPurchaseOrder();
     }
-  }
-
-  void _addItem(Map<String, dynamic> item) {
-    setState(() {
-      _selectedItems.add({
-        ...item,
-        'quantity': 1,
-        'total': item['price'],
-      });
-      _calculateTotals();
-    });
-  }
-
-  void _updateQuantity(int index, int quantity) {
-    if (quantity > 0) {
-      setState(() {
-        _selectedItems[index]['quantity'] = quantity;
-        _selectedItems[index]['total'] = quantity * _selectedItems[index]['price'];
-        _calculateTotals();
-      });
-    }
-  }
-
-  void _removeItem(int index) {
-    setState(() {
-      _selectedItems.removeAt(index);
-      _calculateTotals();
-    });
-  }
-
-  void _calculateTotals() {
-    // Calculate subtotal
-    _subtotal = _selectedItems.fold(0.0, (sum, item) => sum + item['total']);
-
-    // Parse tax and discount values
-    final taxValue = double.tryParse(_taxController.text) ?? 0;
-    final discountValue = double.tryParse(_discountController.text) ?? 0;
-
-    // Calculate tax based on mode
-    _tax = _taxInPercentage ? (_subtotal * taxValue / 100) : taxValue;
-
-    // Calculate discount based on mode
-    final discount = _discountInPercentage
-        ? (_subtotal * discountValue / 100)
-        : discountValue;
-
-    // Calculate final total
-    _total = _subtotal + _tax - discount;
-  }
-
-  Future<void> _savePurchaseOrder() async {
-    if (_formKey.currentState!.validate() && _selectedItems.isNotEmpty) {
-      setState(() => _isSaving = true);
-      try {
-        final databaseRef = FirebaseDatabase.instance.ref();
-        final poRef = databaseRef.child('purchases').push();
-
-        final purchaseData = {
-          'poNumber': _poNumberController.text,
-          'vendorId': _selectedVendorId,
-          'vendorName': _vendors.firstWhere(
-                (v) => v['id'] == _selectedVendorId,
-            orElse: () => {'name': 'Unknown'},
-          )['name'],
-          'deliveryDate': _deliveryDateController.text,
-          'terms': _termsController.text,
-          'notes': _notesController.text,
-          'subtotal': _subtotal,
-          'tax': _tax,
-          'taxMode': _taxInPercentage ? 'percentage' : 'fixed',
-          'taxValue': double.tryParse(_taxController.text) ?? 0,
-          'discount': _discountInPercentage
-              ? (_subtotal * (double.tryParse(_discountController.text) ?? 0) / 100)
-              : (double.tryParse(_discountController.text) ?? 0),
-          'discountMode': _discountInPercentage ? 'percentage' : 'fixed',
-          'discountValue': double.tryParse(_discountController.text) ?? 0,
-          'total': _total,
-          'status': 'pending',
-          'createdAt': ServerValue.timestamp,
-          'items': _selectedItems.map((item) {
-            return {
-              'itemId': item['id'],
-              'name': item['name'],
-              'quantity': item['quantity'],
-              'price': item['price'],
-              'total': item['total'],
-              'unit': item['unit'],
-            };
-          }).toList(),
-        };
-
-        await poRef.set(purchaseData);
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Purchase order saved successfully!')),
-        );
-
-        _clearForm();
-
-      } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error saving purchase order: $e')),
-        );
-      } finally {
-        setState(() => _isSaving = false);
-      }
-    } else if (_selectedItems.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Please add at least one item')),
-      );
-    }
-  }
-
-  void _clearForm() {
-    setState(() {
-      _selectedItems.clear();
-      _subtotal = 0.0;
-      _tax = 0.0;
-      _total = 0.0;
-      _taxController.text = '0';
-      _discountController.text = '0';
-      _taxInPercentage = false;
-      _discountInPercentage = false;
-      _termsController.clear();
-      _notesController.clear();
-      _deliveryDateController.clear();
-      _selectedDate = DateTime.now().add(Duration(days: 7));
-      _poNumberController.text = 'PO-${DateTime.now().millisecondsSinceEpoch.toString().substring(5)}';
-    });
   }
 
   @override
+  void dispose() {
+    _itemSearchController.dispose();
+    _vendorSearchController.dispose();
+    _notesController.dispose();
+    for (var item in _orderItems) {
+      item.quantityController.dispose();
+      item.priceController.dispose();
+      item.searchController.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<Uint8List> _generatePdf() async {
+    final languageProvider = Provider.of<LanguageProvider>(context, listen: false);
+
+    final pdf = pw.Document();
+
+    // Add a page with all the purchase order details
+    pdf.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        build: (pw.Context context) => [
+          // Header
+          pw.Header(
+            level: 0,
+            child: pw.Text(
+              languageProvider.isEnglish ? 'Purchase Order' : 'خریداری کا آرڈر',
+              style: pw.TextStyle(
+                fontSize: 24,
+                fontWeight: pw.FontWeight.bold,
+              ),
+            ),
+          ),
+
+          // Vendor Information
+          pw.SizedBox(height: 20),
+          pw.Text(
+            languageProvider.isEnglish ? 'Vendor Information' : 'فروش کی معلومات',
+            style: pw.TextStyle(
+              fontSize: 16,
+              fontWeight: pw.FontWeight.bold,
+            ),
+          ),
+          pw.SizedBox(height: 10),
+          pw.Text(_selectedVendor?['name'] ?? ''),
+          if (_selectedVendor?['contact'] != null && _selectedVendor?['contact'].isNotEmpty)
+            pw.Text(_selectedVendor?['contact'] ?? ''),
+
+          // Order Dates
+          pw.SizedBox(height: 20),
+          pw.Row(
+            children: [
+              pw.Expanded(
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Text(languageProvider.isEnglish ? 'Order Date:' : 'آرڈر کی تاریخ:'),
+                    pw.Text(DateFormat('yyyy-MM-dd').format(_orderDate)),
+                  ],
+                ),
+              ),
+              pw.Expanded(
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Text(languageProvider.isEnglish ? 'Expected Delivery:' : 'متوقع ترسیل:'),
+                    pw.Text(DateFormat('yyyy-MM-dd').format(_expectedDeliveryDate)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+
+          // Order Items Table
+          pw.SizedBox(height: 20),
+          pw.Text(
+            languageProvider.isEnglish ? 'Order Items' : 'آرڈر آئٹمز',
+            style: pw.TextStyle(
+              fontSize: 16,
+              fontWeight: pw.FontWeight.bold,
+            ),
+          ),
+          pw.SizedBox(height: 10),
+          pw.Table.fromTextArray(
+            context: context,
+            border: pw.TableBorder.all(),
+            headers: [
+              languageProvider.isEnglish ? 'No.' : 'نمبر',
+              languageProvider.isEnglish ? 'Item Name' : 'آئٹم کا نام',
+              languageProvider.isEnglish ? 'Qty' : 'مقدار',
+              languageProvider.isEnglish ? 'Price' : 'قیمت',
+              languageProvider.isEnglish ? 'Total' : 'کل',
+            ],
+            data: _orderItems
+                .where((item) => item.selectedItem != null)
+                .map((item) {
+              final quantity = double.tryParse(item.quantityController.text) ?? 0.0;
+              final price = double.tryParse(item.priceController.text) ?? 0.0;
+              final total = quantity * price;
+
+              return [
+                (_orderItems.indexOf(item) + 1).toString(),
+                item.selectedItem?['itemName'] ?? '',
+                quantity.toStringAsFixed(2),
+                price.toStringAsFixed(2),
+                total.toStringAsFixed(2),
+              ];
+            })
+                .toList(),
+          ),
+
+          // Order Summary
+          pw.SizedBox(height: 20),
+          pw.Text(
+            languageProvider.isEnglish ? 'Order Summary' : 'آرڈر کا خلاصہ',
+            style: pw.TextStyle(
+              fontSize: 16,
+              fontWeight: pw.FontWeight.bold,
+            ),
+          ),
+          pw.SizedBox(height: 10),
+          pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            children: [
+              pw.Text(languageProvider.isEnglish ? 'Subtotal:' : 'ذیلی کل:'),
+              pw.Text('${calculateTotal().toStringAsFixed(2)} PKR'),
+            ],
+          ),
+          pw.SizedBox(height: 10),
+          pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            children: [
+              pw.Text(
+                languageProvider.isEnglish ? 'Grand Total:' : 'کل کل:',
+                style: pw.TextStyle(
+                  fontWeight: pw.FontWeight.bold,
+                ),
+              ),
+              pw.Text(
+                '${calculateTotal().toStringAsFixed(2)} PKR',
+                style: pw.TextStyle(
+                  fontWeight: pw.FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+
+          // Notes
+          if (_notesController.text.isNotEmpty) ...[
+            pw.SizedBox(height: 20),
+            pw.Text(
+              languageProvider.isEnglish ? 'Notes' : 'نوٹس',
+              style: pw.TextStyle(
+                fontSize: 16,
+                fontWeight: pw.FontWeight.bold,
+              ),
+            ),
+            pw.SizedBox(height: 10),
+            pw.Text(_notesController.text),
+          ],
+        ],
+      ),
+    );
+
+    return pdf.save();
+  }
+
+  Future<void> fetchPurchaseOrder() async {
+    setState(() => _isLoadingOrder = true);
+    try {
+      final snapshot = await FirebaseDatabase.instance.ref()
+          .child('purchaseOrders')
+          .child(widget.orderKey!)
+          .get();
+
+      if (snapshot.exists) {
+        final orderData = snapshot.value as Map<dynamic, dynamic>;
+
+        setState(() {
+          // Handle potential null values with default values
+          _orderDate = DateTime.parse(orderData['orderDate']?.toString() ?? DateTime.now().toString());
+          _expectedDeliveryDate = DateTime.parse(orderData['expectedDeliveryDate']?.toString() ?? DateTime.now().add(Duration(days: 7)).toString());
+          _status = orderData['status']?.toString() ?? 'pending';
+          _notesController.text = orderData['notes']?.toString() ?? '';
+
+          // Find and set the vendor
+          final vendorId = orderData['vendorId']?.toString();
+          if (vendorId != null) {
+            _selectedVendor = _vendors.firstWhere(
+                  (v) => v['key'] == vendorId,
+              orElse: () => {
+                'key': vendorId,
+                'name': orderData['vendorName']?.toString() ?? 'Unknown Vendor',
+                'contact': orderData['vendorContact']?.toString() ?? '',
+              },
+            );
+          }
+
+          // Set items - handle potential null items list
+          final List<dynamic> items = (orderData['items'] as List<dynamic>?) ?? [];
+          _orderItems = items.map((item) {
+            final orderItem = PurchaseOrderItem();
+            orderItem.selectedItem = {
+              'key': item['itemId']?.toString() ?? '',
+              'itemName': item['itemName']?.toString() ?? 'Unknown Item',
+              'costPrice': (item['price'] as num?)?.toDouble() ?? 0.0,
+              'qtyOnHand': 0.0, // Will be updated when items are loaded
+            };
+            orderItem.quantityController.text = (item['quantity']?.toString() ?? '0');
+            orderItem.priceController.text = (item['price']?.toString() ?? '0');
+            orderItem.searchController.text = orderItem.selectedItem!['itemName']; // Add this line
+            return orderItem;
+          }).toList();
+        });
+      }
+    } finally {
+      setState(() => _isLoadingOrder = false);
+    }
+  }
+
+  Future<void> fetchItems() async {
+    setState(() => _isLoadingItems = true);
+    final database = FirebaseDatabase.instance.ref();
+    try {
+      final snapshot = await database.child('items').get();
+      if (snapshot.exists) {
+        final Map<dynamic, dynamic> itemData = snapshot.value as Map<dynamic, dynamic>;
+        setState(() {
+          _items = itemData.entries.map((entry) => {
+            'key': entry.key,
+            'itemName': entry.value['itemName'],
+            'costPrice': (entry.value['costPrice'] as num?)?.toDouble() ?? 0.0,
+            'qtyOnHand': (entry.value['qtyOnHand'] as num?)?.toDouble() ?? 0.0,
+          }).toList();
+
+          // Update qtyOnHand for existing order items
+          if (widget.orderKey != null) {
+            for (var orderItem in _orderItems) {
+              if (orderItem.selectedItem != null) {
+                final item = _items.firstWhere(
+                      (i) => i['key'] == orderItem.selectedItem!['key'],
+                  orElse: () => {'qtyOnHand': 0.0},
+                );
+                orderItem.selectedItem!['qtyOnHand'] = item['qtyOnHand'];
+              }
+            }
+          }
+        });
+      }
+    } finally {
+      setState(() => _isLoadingItems = false);
+    }
+  }
+
+  Future<void> fetchVendors() async {
+    setState(() => _isLoadingVendors = true);
+    final database = FirebaseDatabase.instance.ref();
+    try {
+      final snapshot = await database.child('vendors').get();
+      if (snapshot.exists) {
+        final Map<dynamic, dynamic> vendorData = snapshot.value as Map<dynamic, dynamic>;
+        setState(() {
+          _vendors = vendorData.entries.map((entry) => {
+            'key': entry.key,
+            'name': entry.value['name'],
+            'contact': entry.value['contact'] ?? '',
+          }).toList();
+
+          // Update selected vendor if it exists
+          if (_selectedVendor != null) {
+            _selectedVendor = _vendors.firstWhere(
+                  (v) => v['key'] == _selectedVendor!['key'],
+              orElse: () => _selectedVendor!,
+            );
+          }
+        });
+      }
+    } finally {
+      setState(() => _isLoadingVendors = false);
+    }
+  }
+
+  Future<void> _selectDate(BuildContext context, bool isOrderDate) async {
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: isOrderDate ? _orderDate : _expectedDeliveryDate,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2101),
+    );
+
+    if (picked != null) {
+      setState(() {
+        if (isOrderDate) {
+          _orderDate = picked;
+        } else {
+          _expectedDeliveryDate = picked;
+        }
+      });
+    }
+  }
+
+  void addNewItem() {
+    setState(() {
+      _orderItems.add(PurchaseOrderItem());
+    });
+  }
+
+  void removeItem(int index) {
+    setState(() {
+      _orderItems[index].quantityController.dispose();
+      _orderItems[index].priceController.dispose();
+      _orderItems[index].searchController.dispose();
+      _orderItems.removeAt(index);
+    });
+  }
+
+  double calculateTotal() {
+    double total = 0.0;
+    for (var item in _orderItems) {
+      if (item.selectedItem != null) {
+        try {
+          final quantity = double.tryParse(item.quantityController.text) ?? 0.0;
+          final price = double.tryParse(item.priceController.text) ?? 0.0;
+          total += quantity * price;
+        } catch (e) {
+          // Handle any parsing errors
+          print('Error calculating total: $e');
+        }
+      }
+    }
+    return total;
+  }
+
+  void savePurchaseOrder() async {
+    final languageProvider = Provider.of<LanguageProvider>(context, listen: false);
+
+    if (_formKey.currentState?.validate() ?? false) {
+      if (_selectedVendor == null || _selectedVendor?['key'] == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(languageProvider.isEnglish
+              ? 'Please select a vendor'
+              : 'براہ کرم فروش منتخب کریں')),
+        );
+        return;
+      }
+
+      // Filter and validate items
+      final validItems = _orderItems.where((item) {
+        return item.selectedItem != null &&
+            item.selectedItem?['key'] != null &&
+            item.quantityController.text.isNotEmpty &&
+            item.priceController.text.isNotEmpty;
+      }).toList();
+
+      if (validItems.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(languageProvider.isEnglish
+              ? 'Please add at least one valid item'
+              : 'براہ کرم کم از کم ایک درست آئٹم شامل کریں')),
+        );
+        return;
+      }
+
+      try {
+        final database = FirebaseDatabase.instance.ref();
+        final vendorKey = _selectedVendor!['key'] as String;
+
+        // Prepare items data with null checks
+        final itemsData = validItems.map((item) {
+          final quantity = double.tryParse(item.quantityController.text) ?? 0.0;
+          final price = double.tryParse(item.priceController.text) ?? 0.0;
+
+          return {
+            'itemId': item.selectedItem!['key'] as String,
+            'itemName': item.selectedItem!['itemName'] as String,
+            'quantity': quantity,
+            'price': price,
+            'total': quantity * price,
+          };
+        }).toList();
+
+        // Calculate grand total
+        final grandTotal = itemsData.fold(0.0, (sum, item) => sum + (item['total'] as double));
+
+        // Prepare order data
+        final purchaseOrderData = {
+          'items': itemsData,
+          'vendorId': vendorKey,
+          'vendorName': _selectedVendor?['name'] as String? ?? '',
+          'vendorContact': _selectedVendor?['contact'] as String? ?? '',
+          'grandTotal': grandTotal,
+          'orderDate': _orderDate.toString(),
+          'expectedDeliveryDate': _expectedDeliveryDate.toString(),
+          'notes': _notesController.text,
+          'status': _status ?? 'pending',
+          'updatedAt': DateTime.now().toString(),
+        };
+
+        // Add createdAt for new orders
+        if (widget.orderKey == null) {
+          purchaseOrderData['createdAt'] = DateTime.now().toString();
+        }
+
+        // Save to Firebase
+        if (widget.orderKey == null) {
+          await database.child('purchaseOrders').push().set(purchaseOrderData);
+        } else {
+          await database.child('purchaseOrders').child(widget.orderKey!).update(purchaseOrderData);
+        }
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(languageProvider.isEnglish
+              ? 'Purchase order ${widget.orderKey == null ? 'created' : 'updated'} successfully!'
+              : 'خریداری کا آرڈر ${widget.orderKey == null ? 'بن گیا' : 'اپ ڈیٹ ہو گیا'}!')),
+        );
+
+        Navigator.pop(context);
+      } catch (error) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${languageProvider.isEnglish
+              ? 'Error saving order:'
+              : 'آرڈر محفوظ کرنے میں خرابی:'} $error')),
+        );
+      }
+    }
+  }
+
+
+  Widget tableHeader(String text) => Padding(
+    padding: const EdgeInsets.all(8.0),
+    child: Text(
+      text,
+      style: const TextStyle(
+        fontWeight: FontWeight.bold,
+        color: Color(0xFFE65100),
+      ),
+    ),
+  );
+
+  @override
   Widget build(BuildContext context) {
+    final languageProvider = Provider.of<LanguageProvider>(context);
+    final total = calculateTotal();
+    if (_isLoadingOrder) {
+      return Scaffold(
+        appBar: AppBar(
+          title: Text(languageProvider.isEnglish ? 'Loading...' : 'لوڈ ہو رہا ہے...'),
+        ),
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
     return Scaffold(
-      backgroundColor: Colors.grey[50],
       appBar: AppBar(
-        elevation: 0,
         title: Text(
-          'Create Purchase Order',
+          widget.orderKey == null
+              ? languageProvider.isEnglish
+              ? 'Create Purchase Order'
+              : 'خریداری کا آرڈر بنائیں'
+              : languageProvider.isEnglish
+              ? 'Edit Purchase Order'
+              : 'خریداری کا آرڈر ایڈٹ کریں',
           style: TextStyle(
             color: Colors.white,
-            fontWeight: FontWeight.w600,
-            fontSize: 18,
+            fontWeight: FontWeight.bold,
           ),
         ),
-        centerTitle: true,
         flexibleSpace: Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(
@@ -255,799 +542,575 @@ class _PurchaseOrderPageState extends State<PurchaseOrderPage> {
             ),
           ),
         ),
+        centerTitle: true,
         actions: [
-          Container(
-            margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-            child: Material(
-              color: Colors.white.withOpacity(0.2),
-              borderRadius: BorderRadius.circular(8),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(8),
-                onTap: () {},
-                child: Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: Icon(Icons.print_outlined, color: Colors.white, size: 20),
-                ),
-              ),
-            ),
-          ),
+          IconButton(onPressed: ()async{
+            if (_selectedVendor == null) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text(languageProvider.isEnglish
+                    ? 'Please select a vendor first'
+                    : 'براہ کرم پہلے فروش منتخب کریں')),
+              );
+              return;
+            }
+
+            final pdfBytes = await _generatePdf();
+            await Printing.layoutPdf(
+              onLayout: (PdfPageFormat format) async => pdfBytes,
+            );
+          }, icon: Icon(Icons.print,color: Colors.white,))
         ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildHeaderSection(),
-              const SizedBox(height: 24),
-              _buildVendorSection(),
-              const SizedBox(height: 24),
-              _buildItemsSection(),
-              const SizedBox(height: 24),
-              if (_selectedItems.isNotEmpty) _buildSelectedItemsSection(),
-              const SizedBox(height: 24),
-              if (_selectedItems.isNotEmpty) _buildTotalsSection(),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  _buildSaveButton(),
-                ],
-              ),
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Color(0xFFFFF3E0),
+              Color(0xFFFFE0B2),
             ],
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _buildHeaderSection() {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Container(
-        padding: const EdgeInsets.all(20.0),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
-          gradient: LinearGradient(
-            colors: [Colors.orange[50]!, Colors.amber[50]!],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-        ),
-        child: Column(
-          children: [
-            Row(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Form(
+            key: _formKey,
+            child: ListView(
               children: [
-                Icon(Icons.receipt_long, color: Colors.orange[700], size: 24),
-                const SizedBox(width: 8),
-                Text(
-                  'Purchase Order Details',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.orange[800],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 20),
-            Row(
-              children: [
-                Expanded(
-                  child: _buildTextField(
-                    controller: _poNumberController,
-                    label: 'PO Number',
-                    icon: Icons.tag,
-                    readOnly: true,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: _buildTextField(
-                    controller: _deliveryDateController,
-                    label: 'Delivery Date',
-                    icon: Icons.calendar_today,
-                    readOnly: true,
-                    onTap: () => _selectDate(context),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildVendorSection() {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.business, color: Colors.blue[700], size: 24),
-                const SizedBox(width: 8),
-                Text(
-                  'Vendor Information',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.blue[800],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            DropdownButtonFormField<String>(
-              value: _selectedVendorId,
-              decoration: InputDecoration(
-                labelText: 'Select Vendor',
-                prefixIcon: Icon(Icons.search, color: Colors.blue[600]),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: BorderSide.none,
-                ),
-                filled: true,
-                fillColor: Colors.grey[50],
-              ),
-              items: _vendors.map((vendor) {
-                return DropdownMenuItem<String>(
-                  value: vendor['id'],
-                  child: Text(vendor['name']),
-                );
-              }).toList(),
-              onChanged: (value) {
-                setState(() {
-                  _selectedVendorId = value;
-                });
-              },
-              validator: (value) {
-                if (value == null || value.isEmpty) {
-                  return 'Please select a vendor';
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 12),
-            _buildTextField(
-              controller: _termsController,
-              label: 'Payment Terms',
-              icon: Icons.payment,
-            ),
-            const SizedBox(height: 12),
-            _buildTextField(
-              controller: _notesController,
-              label: 'Notes',
-              icon: Icons.note,
-              maxLines: 2,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildItemsSection() {
-    TextEditingController _searchController = TextEditingController();
-    List<Map<String, dynamic>> _filteredItems = [..._items];
-
-    void _filterItems(String query) {
-      setState(() {
-        _filteredItems = _items.where((item) {
-          final name = item['name'].toString().toLowerCase();
-          final searchLower = query.toLowerCase();
-          return name.contains(searchLower);
-        }).toList();
-      });
-    }
-
-    Future<void> _showAllItemsDialog(BuildContext context) async {
-      TextEditingController dialogSearchController = TextEditingController();
-      List<Map<String, dynamic>> dialogFilteredItems = [..._items];
-
-      void filterDialogItems(String query) {
-        setState(() {
-          dialogFilteredItems = _items.where((item) {
-            final name = item['name'].toString().toLowerCase();
-            final searchLower = query.toLowerCase();
-            return name.contains(searchLower);
-          }).toList();
-        });
-      }
-
-      return showDialog(
-        context: context,
-        builder: (context) {
-          return StatefulBuilder(
-            builder: (context, setState) {
-              return AlertDialog(
-                title: Text('Select Items'),
-                content: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    TextField(
-                      controller: dialogSearchController,
-                      decoration: InputDecoration(
-                        labelText: 'Search items',
-                        prefixIcon: Icon(Icons.search),
-                        border: OutlineInputBorder(),
+                // Status Dropdown (only for editing)
+                if (widget.orderKey != null) ...[
+                  DropdownButtonFormField<String>(
+                    value: _status,
+                    items: [
+                      DropdownMenuItem(
+                        value: 'pending',
+                        child: Text(languageProvider.isEnglish ? 'Pending' : 'زیر التوا'),
                       ),
-                      onChanged: filterDialogItems,
+                      DropdownMenuItem(
+                        value: 'fulfilled',
+                        child: Text(languageProvider.isEnglish ? 'Fulfilled' : 'مکمل'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'cancelled',
+                        child: Text(languageProvider.isEnglish ? 'Cancelled' : 'منسوخ'),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      setState(() {
+                        _status = value;
+                      });
+                    },
+                    decoration: InputDecoration(
+                      labelText: languageProvider.isEnglish ? 'Status' : 'حالت',
+                      border: OutlineInputBorder(),
                     ),
-                    SizedBox(height: 16),
-                    Container(
-                      height: MediaQuery.of(context).size.height * 0.5,
-                      width: MediaQuery.of(context).size.width * 0.8,
-                      child: ListView.builder(
-                        itemCount: dialogFilteredItems.length,
-                        itemBuilder: (context, index) {
-                          final item = dialogFilteredItems[index];
-                          return Card(
-                            margin: EdgeInsets.symmetric(vertical: 4),
-                            child: ListTile(
-                              leading: _buildItemImage(item['image']),
-                              title: Text(item['name']),
-                              subtitle: Text('${item['price']} PKR/${item['unit']}'),
-                              trailing: IconButton(
-                                icon: Icon(Icons.add, color: Colors.green),
-                                onPressed: () {
-                                  _addItem(item);
-                                  Navigator.pop(context);
-                                },
+                  ),
+                  SizedBox(height: 16),
+                ],
+
+                // Vendor Information Section
+                Card(
+                  elevation: 2,
+                  child: Padding(
+                    padding: const EdgeInsets.all(12.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          languageProvider.isEnglish ? 'Vendor Information' : 'فروش کی معلومات',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFFE65100),
+                            fontSize: 16,
+                          ),
+                        ),
+                        SizedBox(height: 12),
+
+                        // Search Vendor Field
+                        Autocomplete<Map<String, dynamic>>(
+                          optionsBuilder: (textEditingValue) {
+                            if (textEditingValue.text.isEmpty) return const Iterable.empty();
+                            return _vendors.where((vendor) =>
+                                vendor['name'].toLowerCase().contains(textEditingValue.text.toLowerCase()));
+                          },
+                          displayStringForOption: (vendor) => vendor['name'],
+                          onSelected: (vendor) {
+                            setState(() {
+                              _selectedVendor = vendor;
+                            });
+                          },
+                          fieldViewBuilder: (context, controller, focusNode, onSubmit) {
+                            _vendorSearchController = controller;
+                            return TextFormField(
+                              controller: controller,
+                              focusNode: focusNode,
+                              decoration: InputDecoration(
+                                labelText: languageProvider.isEnglish ? 'Search Vendor' : 'وینڈر تلاش کریں',
+                                border: OutlineInputBorder(
+                                  borderSide: BorderSide(color: Color(0xFFFF8A65)),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderSide: BorderSide(color: Color(0xFFFF8A65)),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+
+                        if (_selectedVendor != null) ...[
+                          SizedBox(height: 12),
+                          Text(
+                            languageProvider.isEnglish ? 'Selected Vendor:' : 'منتخب فروش:',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          SizedBox(height: 4),
+                          Text(_selectedVendor!['name']),
+                          if (_selectedVendor!['contact'] != null && _selectedVendor!['contact'].isNotEmpty)
+                            Text(_selectedVendor!['contact']),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+                SizedBox(height: 16),
+
+                // Order Dates Section
+                Card(
+                  elevation: 2,
+                  child: Padding(
+                    padding: const EdgeInsets.all(12.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          languageProvider.isEnglish ? 'Order Dates' : 'آرڈر کی تاریخ',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFFE65100),
+                            fontSize: 16,
+                          ),
+                        ),
+                        SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(languageProvider.isEnglish ? 'Order Date' : 'آرڈر کی تاریخ'),
+                                  SizedBox(height: 4),
+                                  InkWell(
+                                    onTap: () => _selectDate(context, true),
+                                    child: Container(
+                                      padding: EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+                                      decoration: BoxDecoration(
+                                        border: Border.all(color: Colors.grey),
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Text(DateFormat('yyyy-MM-dd').format(_orderDate)),
+                                          Icon(Icons.calendar_today, size: 18),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
-                          );
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: Text('Close'),
-                  ),
-                ],
-              );
-            },
-          );
-        },
-      );
-    }
-
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.inventory_2_outlined, color: Colors.green[700], size: 24),
-                    const SizedBox(width: 8),
-                    Text(
-                      'Items',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.green[800],
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _searchController,
-              decoration: InputDecoration(
-                labelText: 'Search items',
-                prefixIcon: Icon(Icons.search),
-                suffixIcon: IconButton(
-                  icon: Icon(Icons.list),
-                  onPressed: () => _showAllItemsDialog(context),
-                  tooltip: 'View all items',
-                ),
-                border: OutlineInputBorder(),
-              ),
-              onChanged: _filterItems,
-            ),
-            const SizedBox(height: 16),
-            if (_items.isEmpty)
-              Container(
-                padding: const EdgeInsets.all(32),
-                child: Column(
-                  children: [
-                    Icon(Icons.inventory_2_outlined, size: 64, color: Colors.grey[400]),
-                    const SizedBox(height: 16),
-                    Text(
-                      'Loading items...',
-                      style: TextStyle(color: Colors.grey[600], fontSize: 16),
-                    ),
-                  ],
-                ),
-              )
-            else
-              Container(
-                height: 200,
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey[300]!),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: _filteredItems.isEmpty
-                    ? Center(
-                  child: Text(
-                    'No items found',
-                    style: TextStyle(color: Colors.grey[600]),
-                  ),
-                )
-                    : ListView.builder(
-                  itemCount: _filteredItems.length,
-                  itemBuilder: (context, index) {
-                    final item = _filteredItems[index];
-                    return ListTile(
-                      leading: _buildItemImage(item['image']),
-                      title: Text(item['name']),
-                      subtitle: Text('${item['price']} PKR/${item['unit']}'),
-                      trailing: IconButton(
-                        icon: Icon(Icons.add, color: Colors.orange[300]),
-                        onPressed: () => _addItem(item),
-                      ),
-                    );
-                  },
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildItemImage(String? imageData) {
-    return Container(
-      width: 40,
-      height: 40,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(8),
-        color: Colors.grey[200],
-      ),
-      child: (imageData != null && imageData.isNotEmpty)
-          ? ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: _buildImageFromBase64(imageData),
-      )
-          : Icon(Icons.image, color: Colors.grey),
-    );
-  }
-
-  Widget _buildImageFromBase64(String base64String) {
-    try {
-      // Check if the string is a URL or Base64
-      if (base64String.startsWith('http') || base64String.startsWith('https')) {
-        return Image.network(
-          base64String,
-          fit: BoxFit.cover,
-          errorBuilder: (context, error, stackTrace) =>
-              Icon(Icons.broken_image, color: Colors.grey),
-        );
-      } else {
-        // Handle Base64 image
-        return Image.memory(
-          base64Decode(base64String),
-          fit: BoxFit.cover,
-          errorBuilder: (context, error, stackTrace) =>
-              Icon(Icons.broken_image, color: Colors.grey),
-        );
-      }
-    } catch (e) {
-      print('Error loading image: $e');
-      return Icon(Icons.broken_image, color: Colors.grey);
-    }
-  }
-
-  Widget _buildSelectedItemsSection() {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.list_alt, color: Colors.purple[700], size: 24),
-                const SizedBox(width: 8),
-                Text(
-                  'Order Items',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.purple[800],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            ..._selectedItems.asMap().entries.map((entry) {
-              final index = entry.key;
-              final item = entry.value;
-              return Container(
-                margin: const EdgeInsets.only(bottom: 16),
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.grey[200]!),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.grey.withOpacity(0.1),
-                      spreadRadius: 1,
-                      blurRadius: 3,
-                      offset: const Offset(0, 1),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: Colors.blue[50],
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: Text(
-                            'Item ${index + 1}',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w600,
-                              color: Colors.blue[700],
-                              fontSize: 12,
+                            SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(languageProvider.isEnglish ? 'Expected Delivery' : 'متوقع ترسیل'),
+                                  SizedBox(height: 4),
+                                  InkWell(
+                                    onTap: () => _selectDate(context, false),
+                                    child: Container(
+                                      padding: EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+                                      decoration: BoxDecoration(
+                                        border: Border.all(color: Colors.grey),
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Text(DateFormat('yyyy-MM-dd').format(_expectedDeliveryDate)),
+                                          Icon(Icons.calendar_today, size: 18),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
-                          onPressed: () => _removeItem(index),
-                          style: IconButton.styleFrom(
-                            backgroundColor: Colors.red[50],
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                          ),
+                          ],
                         ),
                       ],
                     ),
-                    const SizedBox(height: 12),
-                    Row(
+                  ),
+                ),
+                SizedBox(height: 16),
+
+                // Order Items Section
+                Card(
+                  elevation: 2,
+                  child: Padding(
+                    padding: const EdgeInsets.all(12.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _buildItemImage(item['image']),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              _buildInfoRow('Name:', item['name']),
-                              _buildInfoRow('Price:', '${item['price']} PKR/${item['unit']}'),
-                            ],
-                          ),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              languageProvider.isEnglish ? 'Order Items' : 'آرڈر آئٹمز',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFFE65100),
+                                fontSize: 16,
+                              ),
+                            ),
+                            ElevatedButton(
+                              onPressed: addNewItem,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Color(0xFFFF8A65),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                padding: EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.add, size: 16, color: Colors.white),
+                                  SizedBox(width: 4),
+                                  Text(
+                                    languageProvider.isEnglish ? 'Add Item' : 'آئٹم شامل کریں',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        SizedBox(height: 12),
+
+                        Table(
+                          columnWidths: const {
+                            0: FixedColumnWidth(40), // Item #
+                            1: FlexColumnWidth(2),   // Item Name
+                            2: FlexColumnWidth(1.5), // Quantity
+                            3: FlexColumnWidth(1.5), // Price
+                            4: FixedColumnWidth(40), // Delete Icon
+                          },
+                          border: TableBorder.all(color: Colors.orange.shade100, width: 1),
+                          children: [
+                            // Header Row
+                            TableRow(
+                              decoration: BoxDecoration(color: Colors.orange.shade50),
+                              children: [
+                                tableHeader('No.'),
+                                tableHeader(languageProvider.isEnglish ? 'Item Name' : 'آئٹم کا نام'),
+                                tableHeader(languageProvider.isEnglish ? 'Qty' : 'مقدار'),
+                                tableHeader(languageProvider.isEnglish ? 'Price' : 'قیمت'),
+                                SizedBox(), // empty header for delete icon
+                              ],
+                            ),
+
+                            // Item Rows
+                            ..._orderItems.asMap().entries.map((entry) {
+                              final index = entry.key;
+                              final item = entry.value;
+
+                              return TableRow(
+                                children: [
+                                  Padding(
+                                    padding: const EdgeInsets.all(8.0),
+                                    child: Text('${index + 1}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                                  ),
+
+                                  // Item Search Field
+                                  Padding(
+                                      padding: const EdgeInsets.all(6.0),
+                                      child:
+                                      // Autocomplete<Map<String, dynamic>>(
+                                      //   optionsBuilder: (textEditingValue) {
+                                      //     if (textEditingValue.text.isEmpty) return const Iterable.empty();
+                                      //     return _items
+                                      //         .where((i) => i['itemName']
+                                      //         .toLowerCase()
+                                      //         .contains(textEditingValue.text.toLowerCase()))
+                                      //         .cast<Map<String, dynamic>>();
+                                      //   },
+                                      //   displayStringForOption: (i) => i['itemName'],
+                                      //   onSelected: (selectedItem) {
+                                      //     setState(() {
+                                      //       item.selectedItem = selectedItem;
+                                      //       item.searchController.text = selectedItem['itemName'];
+                                      //       item.priceController.text = selectedItem['costPrice'].toStringAsFixed(2);
+                                      //     });
+                                      //   },
+                                      //   fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
+                                      //     // Make sure we're using the item's controller
+                                      //     if (item.searchController != controller) {
+                                      //       item.searchController = controller;
+                                      //     }
+                                      //     return TextFormField(
+                                      //       controller: controller,
+                                      //       focusNode: focusNode,
+                                      //       decoration: const InputDecoration(
+                                      //         isDense: true,
+                                      //         border: OutlineInputBorder(),
+                                      //         contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                                      //       ),
+                                      //     );
+                                      //   },
+                                      // )
+                                      Autocomplete<Map<String, dynamic>>(
+                                        initialValue: TextEditingValue(text: item.searchController.text),
+                                        optionsBuilder: (textEditingValue) {
+                                          if (textEditingValue.text.isEmpty) return const Iterable.empty();
+                                          return _items
+                                              .where((i) => i['itemName']
+                                              .toLowerCase()
+                                              .contains(textEditingValue.text.toLowerCase()))
+                                              .cast<Map<String, dynamic>>();
+                                        },
+                                        displayStringForOption: (i) => i['itemName'],
+                                        onSelected: (selectedItem) {
+                                          setState(() {
+                                            item.selectedItem = selectedItem;
+                                            item.searchController.text = selectedItem['itemName'];
+                                            item.priceController.text = selectedItem['costPrice'].toStringAsFixed(2);
+                                          });
+                                        },
+                                        fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
+                                          // Sync the controller with the item's controller
+                                          controller.text = item.searchController.text;
+                                          return TextFormField(
+                                            controller: controller,
+                                            focusNode: focusNode,
+                                            onChanged: (value) {
+                                              item.searchController.text = value;
+                                            },
+                                            decoration: const InputDecoration(
+                                              isDense: true,
+                                              border: OutlineInputBorder(),
+                                              contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                                            ),
+                                          );
+                                        },
+                                      )
+
+                                  ),
+
+                                  // Quantity
+                                  Padding(
+                                    padding: const EdgeInsets.all(6.0),
+                                    child: TextFormField(
+                                      controller: item.quantityController,
+                                      keyboardType: TextInputType.number,
+                                      onChanged: (value) {
+                                        setState(() {}); // This will trigger a rebuild and update the total
+                                      },
+                                      decoration: const InputDecoration(
+                                        isDense: true,
+                                        border: OutlineInputBorder(),
+                                        contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                                      ),
+                                      validator: (value) {
+                                        // Only validate if an item is selected
+                                        if (item.selectedItem != null && (value == null || value.isEmpty)) {
+                                          return languageProvider.isEnglish
+                                              ? 'Enter qty'
+                                              : 'مقدار درج کریں';
+                                        }
+                                        return null;
+                                      },
+                                    ),
+                                  ),
+
+                                  // Price
+                                  Padding(
+                                    padding: const EdgeInsets.all(6.0),
+                                    child: TextFormField(
+                                      controller: item.priceController,
+                                      keyboardType: TextInputType.number,
+                                      onChanged: (value) {
+                                        setState(() {}); // This will trigger a rebuild and update the total
+                                      },
+                                      decoration: const InputDecoration(
+                                        isDense: true,
+                                        border: OutlineInputBorder(),
+                                        contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                                      ),
+                                      validator: (value) {
+                                        // Only validate if an item is selected
+                                        if (item.selectedItem != null && (value == null || value.isEmpty)) {
+                                          return languageProvider.isEnglish
+                                              ? 'Enter price'
+                                              : 'قیمت درج کریں';
+                                        }
+                                        return null;
+                                      },
+                                    ),
+                                  ),
+
+                                  // Delete icon
+                                  Center(
+                                    child: IconButton(
+                                      icon: const Icon(Icons.remove_circle, color: Colors.red, size: 20),
+                                      onPressed: () => removeItem(index),
+                                    ),
+                                  ),
+                                ],
+                              );
+                            }),
+                          ],
                         ),
                       ],
                     ),
-                    const SizedBox(height: 8),
-                    Row(
+                  ),
+                ),
+                SizedBox(height: 16),
+
+                // Notes Section
+                Card(
+                  elevation: 2,
+                  child: Padding(
+                    padding: const EdgeInsets.all(12.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded(
-                          child: _buildTextField(
-                            controller: TextEditingController(text: item['quantity'].toString()),
-                            label: 'Quantity',
-                            keyboardType: TextInputType.number,
-                            onChanged: (value) => _updateQuantity(index, int.tryParse(value) ?? 1),
+                        Text(
+                          languageProvider.isEnglish ? 'Notes' : 'نوٹس',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFFE65100),
+                            fontSize: 16,
                           ),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: _buildTextField(
-                            controller: TextEditingController(text: item['price'].toStringAsFixed(2)),
-                            label: 'Price',
-                            readOnly: true,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: _buildTextField(
-                            controller: TextEditingController(text: item['total'].toStringAsFixed(2)),
-                            label: 'Total',
-                            readOnly: true,
+                        SizedBox(height: 8),
+                        TextFormField(
+                          controller: _notesController,
+                          maxLines: 3,
+                          decoration: InputDecoration(
+                            hintText: languageProvider.isEnglish
+                                ? 'Enter any additional notes...'
+                                : 'کوئی اضافی نوٹس درج کریں...',
+                            border: OutlineInputBorder(),
                           ),
                         ),
                       ],
                     ),
-                  ],
+                  ),
                 ),
-              );
-            }).toList(),
-          ],
-        ),
-      ),
-    );
-  }
+                SizedBox(height: 16),
 
-  Widget _buildTotalsSection() {
-    return Card(
-      elevation: 3,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Container(
-        padding: const EdgeInsets.all(20.0),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
-          gradient: LinearGradient(
-            colors: [Colors.indigo[50]!, Colors.blue[50]!],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-        ),
-        child: Column(
-          children: [
-            Row(
-              children: [
-                Icon(Icons.calculate_outlined, color: Colors.indigo[700], size: 24),
-                const SizedBox(width: 8),
-                Text(
-                  'Summary',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.indigo[800],
+                // Order Summary Section
+                // Order Summary Section
+                Card(
+                  elevation: 2,
+                  child: Padding(
+                    padding: const EdgeInsets.all(12.0),
+                    child: Column(
+                      children: [
+                        Text(
+                          languageProvider.isEnglish ? 'Order Summary' : 'آرڈر کا خلاصہ',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFFE65100),
+                            fontSize: 16,
+                          ),
+                        ),
+                        SizedBox(height: 12),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(languageProvider.isEnglish ? 'Subtotal:' : 'ذیلی کل:'),
+                            Text('${calculateTotal().toStringAsFixed(2)} PKR'),
+                          ],
+                        ),
+
+                        Divider(height: 24, thickness: 1),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              languageProvider.isEnglish ? 'Grand Total:' : 'کل کل:',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                            ),
+                            Text(
+                              '${calculateTotal().toStringAsFixed(2)} PKR',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                                color: Color(0xFFE65100),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                SizedBox(height: 24),
+
+                // Submit Button
+                ElevatedButton(
+                  onPressed: savePurchaseOrder,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Color(0xFFFF8A65),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    padding: EdgeInsets.symmetric(vertical: 16),
+                  ),
+                  child: Text(
+                    widget.orderKey == null
+                        ? languageProvider.isEnglish
+                        ? 'Create Purchase Order'
+                        : 'خریداری کا آرڈر بنائیں'
+                        : languageProvider.isEnglish
+                        ? 'Update Purchase Order'
+                        : 'خریداری کا آرڈر اپ ڈیٹ کریں',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 16),
-            _buildTotalRow('Subtotal:', _subtotal.toStringAsFixed(2)),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  flex: 3,
-                  child: _buildTextField(
-                    controller: _taxController,
-                    label: _taxInPercentage ? 'Tax (%)' : 'Tax (PKR)',
-                    keyboardType: TextInputType.numberWithOptions(decimal: true),
-                    onChanged: (value) {
-                      setState(() {
-                        _calculateTotals();
-                      });
-                    },
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  flex: 1,
-                  child: Row(
-                    children: [
-                      Text('PKR'),
-                      Switch(
-                        value: _taxInPercentage,
-                        onChanged: (value) {
-                          setState(() {
-                            _taxInPercentage = value;
-                            _calculateTotals();
-                          });
-                        },
-                        activeColor: Colors.orange,
-                      ),
-                      Text('%'),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  flex: 3,
-                  child: _buildTextField(
-                    controller: _discountController,
-                    label: _discountInPercentage ? 'Discount (%)' : 'Discount (PKR)',
-                    keyboardType: TextInputType.numberWithOptions(decimal: true),
-                    onChanged: (value) {
-                      setState(() {
-                        _calculateTotals();
-                      });
-                    },
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  flex: 1,
-                  child: Row(
-                    children: [
-                      Text('PKR'),
-                      Switch(
-                        value: _discountInPercentage,
-                        onChanged: (value) {
-                          setState(() {
-                            _discountInPercentage = value;
-                            _calculateTotals();
-                          });
-                        },
-                        activeColor: Colors.orange,
-                      ),
-                      Text('%'),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            _buildTotalRow('Tax:', _tax.toStringAsFixed(2)),
-            const SizedBox(height: 8),
-            _buildTotalRow(
-              'Discount:',
-              (_discountInPercentage
-                  ? (_subtotal * (double.tryParse(_discountController.text) ?? 0) / 100)
-                  : (double.tryParse(_discountController.text) ?? 0)
-              ).toStringAsFixed(2),
-              color: Colors.red[600],
-            ),
-            const Divider(thickness: 2, height: 24),
-            Container(
-              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-              decoration: BoxDecoration(
-                color: Colors.indigo[100],
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: _buildTotalRow(
-                'GRAND TOTAL:',
-                _total.toStringAsFixed(2),
-                isBold: true,
-                fontSize: 18,
-                color: Colors.indigo[800],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSaveButton() {
-    return ElevatedButton(
-      onPressed: _isSaving ? null : _savePurchaseOrder,
-      style: ElevatedButton.styleFrom(
-        backgroundColor: Colors.orange[300],
-        padding: const EdgeInsets.symmetric(vertical: 16,horizontal: 6),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
-        ),
-      ),
-      child: _isSaving
-          ? CircularProgressIndicator(color: Colors.white)
-          : Text(
-        'Submit Purchase Order',
-        style: TextStyle(
-          color: Colors.white,
-          fontSize: 16,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTextField({
-    required TextEditingController controller,
-    required String label,
-    IconData? icon,
-    bool readOnly = false,
-    TextInputType? keyboardType,
-    int maxLines = 1,
-    Function(String)? onChanged,
-    VoidCallback? onTap,
-  }) {
-    return TextField(
-      controller: controller,
-      readOnly: readOnly,
-      keyboardType: keyboardType,
-      maxLines: maxLines,
-      onChanged: onChanged,
-      onTap: onTap,
-      decoration: InputDecoration(
-        labelText: label,
-        prefixIcon: icon != null ? Icon(icon, color: Colors.grey[600]) : null,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: Colors.grey[300]!),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: Colors.teal, width: 2),
-        ),
-        filled: true,
-        fillColor: readOnly ? Colors.grey[100] : Colors.grey[50],
-      ),
-    );
-  }
-
-  Widget _buildTotalRow(String label, String value, {
-    bool isBold = false,
-    double fontSize = 14,
-    Color? color,
-  }) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(
-          label,
-          style: TextStyle(
-            fontWeight: isBold ? FontWeight.bold : FontWeight.w500,
-            fontSize: fontSize,
-            color: color,
           ),
         ),
-        Text(
-          value,
-          style: TextStyle(
-            fontWeight: isBold ? FontWeight.bold : FontWeight.w600,
-            fontSize: fontSize,
-            color: color ?? Colors.grey[800],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildInfoRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              fontWeight: FontWeight.w500,
-              color: Colors.grey[700],
-            ),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            value,
-            style: TextStyle(
-              fontWeight: FontWeight.w600,
-              color: Colors.teal[700],
-            ),
-          ),
-        ],
       ),
     );
   }
+}
 
-  @override
-  void dispose() {
-    // Remove listeners when disposing
-    _taxController.removeListener(_calculateTotals);
-    _discountController.removeListener(_calculateTotals);
+class PurchaseOrderItem {
+  late TextEditingController searchController;
+  late TextEditingController quantityController;
+  late TextEditingController priceController;
+  Map<String, dynamic>? selectedItem;
 
-    _poNumberController.dispose();
-    _deliveryDateController.dispose();
-    _termsController.dispose();
-    _notesController.dispose();
-    _taxController.dispose();
-    _discountController.dispose();
-    super.dispose();
+  PurchaseOrderItem() {
+    searchController = TextEditingController();
+    quantityController = TextEditingController();
+    priceController = TextEditingController();
+    selectedItem = null; // Explicitly initialize
+
   }
 }

@@ -109,7 +109,8 @@ class _VendorLedgerPageState extends State<VendorLedgerPage> {
             purchases.add({
               'date': purchaseValue['timestamp'] ?? 'Unknown Date',
               'description': 'Purchase',
-              'credit': (purchaseValue['total'] ?? 0.0).toDouble(),
+              // 'credit': (purchaseValue['total'] ?? 0.0).toDouble(),
+              'credit': (purchaseValue['grandTotal'] ?? 0.0).toDouble(),
               'debit': 0.0,
               'type': 'credit',
             });

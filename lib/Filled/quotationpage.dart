@@ -14,7 +14,6 @@ import '../Provider/customerprovider.dart';
 import '../Provider/lanprovider.dart';
 
 class QuotationPage extends StatefulWidget {
-  // const QuotationPage({super.key});
   final String? quotationId;
   final Map<dynamic, dynamic>? existingQuotation;
 
@@ -46,24 +45,31 @@ class _QuotationPageState extends State<QuotationPage> {
     super.initState();
     _fetchItems();
     _fetchCustomers();
+
+    // Initialize with 10 rows if empty
+    if (_quotationRows.isEmpty) {
+      for (int i = 0; i < 5; i++) {
+        _quotationRows.add({
+          'total': 0.0,
+          'rate': 0.0,
+          'qty': 0.0,
+          'description': '',
+          'itemName': '',
+          'itemNameController': TextEditingController(),
+          'rateController': TextEditingController(),
+          'qtyController': TextEditingController(),
+          'descriptionController': TextEditingController(),
+        });
+      }
+    }
+
     _dateController.text = DateFormat('yyyy-MM-dd').format(DateTime.now());
     _validityController.text = '30';
-    _quotationRows = [
-      {
-        'total': 0.0,
-        'rate': 0.0,
-        'qty': 0.0,
-        'description': '',
-        'itemNameController': TextEditingController(),
-        'rateController': TextEditingController(),
-        'qtyController': TextEditingController(),
-        'descriptionController': TextEditingController(),
-      },
-    ];
-    // Load existing quotation data if provided
     if (widget.existingQuotation != null) {
       _loadExistingQuotation();
     }
+
+
   }
 
   void _loadExistingQuotation() {
@@ -279,6 +285,16 @@ class _QuotationPageState extends State<QuotationPage> {
     final ByteData logoBytes = await rootBundle.load('assets/images/logo.png');
     final logoImage = pw.MemoryImage(logoBytes.buffer.asUint8List());
 
+    // Filter out empty rows
+    final nonEmptyRows = _quotationRows.where((row) {
+      final itemName = row['itemNameController']?.text ?? '';
+      final description = row['description'] ?? '';
+      final qty = row['qty'] ?? 0.0;
+      final rate = row['rate'] ?? 0.0;
+
+      return itemName.isNotEmpty || description.isNotEmpty || qty > 0 || rate > 0;
+    }).toList();
+
     // Create PDF
     pdf.addPage(
       pw.Page(
@@ -329,7 +345,7 @@ class _QuotationPageState extends State<QuotationPage> {
                   'Unit Price',
                   'Total'
                 ],
-                data: _quotationRows.map((row) {
+                data: nonEmptyRows.map((row) {
                   return [
                     row['itemNameController']?.text ?? '',
                     row['description'] ?? '',
@@ -565,7 +581,6 @@ class _QuotationPageState extends State<QuotationPage> {
     super.dispose();
   }
 
-
   @override
   Widget build(BuildContext context) {
     final languageProvider = Provider.of<LanguageProvider>(context);
@@ -585,6 +600,152 @@ class _QuotationPageState extends State<QuotationPage> {
         desktop: _buildDesktopLayout(context, languageProvider),
       ),
     );
+  }
+
+  Widget _buildItemsGallery(BuildContext context, LanguageProvider languageProvider) {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.image_search, color: Colors.pink[700], size: 24),
+                SizedBox(width: 8),
+                Text(
+                  languageProvider.isEnglish ? 'Items Gallery' : 'آئٹمز کی گیلری',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.pink[800],
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: 16),
+            // Remove Expanded and use SizedBox with fixed height
+            SizedBox(
+              height: 400, // Fixed height to avoid unbounded constraints
+              child: ListView.builder(
+                shrinkWrap: true,
+                physics: const AlwaysScrollableScrollPhysics(),
+                itemCount: _items.length,
+                itemBuilder: (context, index) {
+                  final item = _items[index];
+                  final displayPrice = _selectedCustomerId != null
+                      ? item.getPriceForCustomer(_selectedCustomerId)
+                      : item.salePrice;
+
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8.0),
+                    child: Card(
+                      elevation: 2,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(8),
+                        onTap: () => _addItemToQuotation(item),
+                        child: Padding(
+                          padding: const EdgeInsets.all(8.0),
+                          child: Row(
+                            children: [
+                              // Item Image
+                              Container(
+                                width: 80,
+                                height: 80,
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(8),
+                                  color: Colors.grey[200],
+                                ),
+                                child: item.imageBase64 != null && item.imageBase64!.isNotEmpty
+                                    ? ClipRRect(
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: Image.memory(
+                                    base64Decode(item.imageBase64!),
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (context, error, stackTrace) {
+                                      return Center(child: Icon(Icons.broken_image));
+                                    },
+                                  ),
+                                )
+                                    : Center(
+                                  child: Icon(
+                                    Icons.inventory,
+                                    size: 40,
+                                    color: Colors.grey[400],
+                                  ),
+                                ),
+                              ),
+                              SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      item.itemName,
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 14,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    SizedBox(height: 4),
+                                    Text(
+                                      '${displayPrice.toStringAsFixed(2)} rs',
+                                      style: TextStyle(
+                                        color: Colors.green[700],
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _addItemToQuotation(Item item) {
+    final displayPrice = _selectedCustomerId != null
+        ? item.getPriceForCustomer(_selectedCustomerId)
+        : item.salePrice;
+
+    // Find the first empty row or add a new one
+    int emptyRowIndex = _quotationRows.indexWhere((row) =>
+    (row['itemName'] as String).isEmpty &&
+        (row['qty'] as double) == 0.0);
+
+    if (emptyRowIndex == -1) {
+      emptyRowIndex = _quotationRows.length;
+      _addNewRow();
+    }
+
+    setState(() {
+      _quotationRows[emptyRowIndex]['itemName'] = item.itemName;
+      _quotationRows[emptyRowIndex]['itemNameController'].text = item.itemName;
+      _quotationRows[emptyRowIndex]['rate'] = displayPrice;
+      _quotationRows[emptyRowIndex]['rateController'].text = displayPrice.toString();
+      _quotationRows[emptyRowIndex]['description'] = item.itemName;
+      _quotationRows[emptyRowIndex]['descriptionController'].text = item.itemName;
+      _quotationRows[emptyRowIndex]['qty'] = 1.0;
+      _quotationRows[emptyRowIndex]['qtyController'].text = '1';
+      _quotationRows[emptyRowIndex]['total'] = displayPrice * 1.0;
+    });
   }
 
   PreferredSizeWidget _buildAppBar(BuildContext context,
@@ -669,8 +830,7 @@ class _QuotationPageState extends State<QuotationPage> {
     );
   }
 
-  Widget _buildTabletLayout(BuildContext context,
-      LanguageProvider languageProvider) {
+  Widget _buildTabletLayout(BuildContext context, LanguageProvider languageProvider) {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24.0),
       child: Column(
@@ -687,8 +847,7 @@ class _QuotationPageState extends State<QuotationPage> {
                   children: [
                     _buildCustomerSection(context, languageProvider),
                     const SizedBox(height: 24),
-                    _buildItemsSection(
-                        context, languageProvider, isMobile: false),
+                    _buildItemsSection(context, languageProvider, isMobile: false),
                   ],
                 ),
               ),
@@ -706,6 +865,10 @@ class _QuotationPageState extends State<QuotationPage> {
                   ],
                 ),
               ),
+              const SizedBox(width: 24),
+              Expanded(
+                child: _buildItemsGallery(context, languageProvider),
+              ),
             ],
           ),
           const SizedBox(height: 32),
@@ -714,13 +877,12 @@ class _QuotationPageState extends State<QuotationPage> {
     );
   }
 
-  Widget _buildDesktopLayout(BuildContext context,
-      LanguageProvider languageProvider) {
+  Widget _buildDesktopLayout(BuildContext context, LanguageProvider languageProvider) {
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 32.0, vertical: 24.0),
       child: Center(
         child: Container(
-          constraints: const BoxConstraints(maxWidth: 1200),
+          constraints: const BoxConstraints(maxWidth: 1400), // Increased max width
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -735,8 +897,7 @@ class _QuotationPageState extends State<QuotationPage> {
                       children: [
                         _buildCustomerSection(context, languageProvider),
                         const SizedBox(height: 32),
-                        _buildItemsSection(
-                            context, languageProvider, isMobile: false),
+                        _buildItemsSection(context, languageProvider, isMobile: false),
                       ],
                     ),
                   ),
@@ -753,6 +914,10 @@ class _QuotationPageState extends State<QuotationPage> {
                         _buildSaveButton(context, languageProvider),
                       ],
                     ),
+                  ),
+                  const SizedBox(width: 32),
+                  Expanded(
+                    child: _buildItemsGallery(context, languageProvider),
                   ),
                 ],
               ),
@@ -953,8 +1118,11 @@ class _QuotationPageState extends State<QuotationPage> {
     );
   }
 
-  Widget _buildItemsSection(BuildContext context,
-      LanguageProvider languageProvider, {required bool isMobile}) {
+  Widget _buildItemsSection(BuildContext context, LanguageProvider languageProvider,
+      {required bool isMobile})
+  {
+
+
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -968,8 +1136,8 @@ class _QuotationPageState extends State<QuotationPage> {
               children: [
                 Row(
                   children: [
-                    Icon(Icons.inventory_2_outlined, color: Colors.green[700],
-                        size: 24),
+                    Icon(Icons.inventory_2_outlined,
+                        color: Colors.green[700], size: 24),
                     const SizedBox(width: 8),
                     Text(
                       languageProvider.isEnglish ? 'Items' : 'آئٹمز',
@@ -985,8 +1153,7 @@ class _QuotationPageState extends State<QuotationPage> {
                   onPressed: _addNewRow,
                   icon: const Icon(Icons.add, size: 18),
                   label: Text(languageProvider.isEnglish
-                      ? 'Add Item'
-                      : 'آئٹم شامل کریں'),
+                      ? 'Add Item' : 'آئٹم شامل کریں'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.green[600],
                     foregroundColor: Colors.white,
@@ -999,184 +1166,220 @@ class _QuotationPageState extends State<QuotationPage> {
               ],
             ),
             const SizedBox(height: 16),
-            if (_quotationRows.isEmpty)
-              Container(
-                padding: const EdgeInsets.all(32),
-                child: Column(
+
+            // Table header
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+              decoration: BoxDecoration(
+                color: Colors.blue[50],
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    flex: 3,
+                    child: Text(
+                      languageProvider.isEnglish ? 'Item' : 'آئٹم',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue[800],
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    flex: 2,
+                    child: Text(
+                      languageProvider.isEnglish ? 'Description' : 'تفصیل',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue[800],
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      languageProvider.isEnglish ? 'Qty' : 'مقدار',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue[800],
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      languageProvider.isEnglish ? 'Rate' : 'ریٹ',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue[800],
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      languageProvider.isEnglish ? 'Total' : 'کل',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue[800],
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                  const SizedBox(width: 40), // Space for delete button
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+
+            // Items list
+            ListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: _quotationRows.length,
+              itemBuilder: (context, index) => Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(Icons.inventory_2_outlined, size: 64,
-                        color: Colors.grey[400]),
-                    const SizedBox(height: 16),
-                    Text(
-                      languageProvider.isEnglish
-                          ? 'No items added yet'
-                          : 'ابھی تک کوئی آئٹم شامل نہیں',
-                      style: TextStyle(color: Colors.grey[600], fontSize: 16),
+                    // Item Name (Autocomplete)
+                    Expanded(
+                      flex: 3,
+                      child: CustomAutocomplete(
+                        items: _items,
+                        controller: _quotationRows[index]['itemNameController'],
+                        onSelected: (Item selectedItem) {
+                          final customerPrice = selectedItem.getPriceForCustomer(_selectedCustomerId);
+                          setState(() {
+                            _quotationRows[index]['itemName'] = selectedItem.itemName;
+                            _quotationRows[index]['rate'] = customerPrice;
+                            _quotationRows[index]['rateController'].text = customerPrice.toString();
+                            _updateRow(index, 'rate', customerPrice);
+
+                            if (_quotationRows[index]['description'].isEmpty) {
+                              _quotationRows[index]['description'] = selectedItem.itemName;
+                              _quotationRows[index]['descriptionController'].text = selectedItem.itemName;
+                            }
+                          });
+                        },
+                        selectedCustomerId: _selectedCustomerId,
+                        allowManualEntry: true,
+                      ),
+                    ),
+
+                    // Description
+                    Expanded(
+                      flex: 2,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: TextField(
+                          controller: _quotationRows[index]['descriptionController'],
+                          decoration: InputDecoration(
+                            hintText: languageProvider.isEnglish ? 'Description' : 'تفصیل',
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              borderSide: BorderSide(color: Colors.grey[300]!),
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                          ),
+                          maxLines: 1,
+                          onChanged: (value) => _updateRow(index, 'description', value),
+                        ),
+                      ),
+                    ),
+
+                    // Quantity
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: TextField(
+                          controller: _quotationRows[index]['qtyController'],
+                          decoration: InputDecoration(
+                            hintText: languageProvider.isEnglish ? 'Qty' : 'مقدار',
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              borderSide: BorderSide(color: Colors.grey[300]!),
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                          ),
+                          keyboardType: TextInputType.number,
+                          textAlign: TextAlign.center,
+                          onChanged: (value) => _updateRow(index, 'qty', double.tryParse(value) ?? 0.0),
+                        ),
+                      ),
+                    ),
+
+                    // Rate
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: TextField(
+                          controller: _quotationRows[index]['rateController'],
+                          decoration: InputDecoration(
+                            hintText: languageProvider.isEnglish ? 'Rate' : 'ریٹ',
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              borderSide: BorderSide(color: Colors.grey[300]!),
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                          ),
+                          keyboardType: TextInputType.number,
+                          textAlign: TextAlign.center,
+                          onChanged: (value) => _updateRow(index, 'rate', double.tryParse(value) ?? 0.0),
+                        ),
+                      ),
+                    ),
+
+                    // Total
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: TextField(
+                          controller: TextEditingController(
+                            text: (_quotationRows[index]['total'] ?? 0.0).toStringAsFixed(2),
+                          ),
+                          decoration: InputDecoration(
+                            hintText: languageProvider.isEnglish ? 'Total' : 'کل',
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              borderSide: BorderSide(color: Colors.grey[300]!),
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                          ),
+                          readOnly: true,
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+
+                    // Delete button
+                    SizedBox(
+                      width: 40,
+                      child: IconButton(
+                        icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
+                        onPressed: () => _deleteRow(index),
+                        padding: EdgeInsets.zero,
+                      ),
                     ),
                   ],
                 ),
-              )
-            else
-              ListView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemCount: _quotationRows.length,
-                itemBuilder: (context, index) =>
-                    _buildItemCard(context, languageProvider, index, isMobile),
               ),
+            ),
+
+            // Add more items button
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: _addNewRow,
+                icon: const Icon(Icons.add, size: 16),
+                label: Text(languageProvider.isEnglish ? 'Add More Items' : 'مزید آئٹمز شامل کریں'),
+                style: TextButton.styleFrom(
+                  foregroundColor: Colors.blue,
+                ),
+              ),
+            ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildItemCard(BuildContext context, LanguageProvider languageProvider,
-      int index, bool isMobile) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.grey[200]!),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.grey.withOpacity(0.1),
-            spreadRadius: 1,
-            blurRadius: 3,
-            offset: const Offset(0, 1),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.blue[50],
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Text(
-                  '${languageProvider.isEnglish ? 'Item' : 'آئٹم'} ${index +
-                      1}',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: Colors.blue[700],
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-              IconButton(
-                icon: const Icon(
-                    Icons.delete_outline, color: Colors.red, size: 20),
-                onPressed: () => _deleteRow(index),
-                style: IconButton.styleFrom(
-                  backgroundColor: Colors.red[50],
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          CustomAutocomplete(
-            items: _items,
-            controller: _quotationRows[index]['itemNameController'],
-            onSelected: (Item selectedItem) {
-              final customerPrice = selectedItem.getPriceForCustomer(
-                  _selectedCustomerId);
-              setState(() {
-                _quotationRows[index]['itemName'] = selectedItem.itemName;
-                _quotationRows[index]['rate'] = customerPrice;
-                _quotationRows[index]['rateController'].text =
-                    customerPrice.toString();
-                _updateRow(index, 'rate', customerPrice);
-              });
-            },
-            selectedCustomerId: _selectedCustomerId,
-          ),
-          const SizedBox(height: 12),
-          _buildTextField(
-            controller: _quotationRows[index]['descriptionController'],
-            label: languageProvider.isEnglish ? 'Description' : 'تفصیل',
-            icon: Icons.description,
-            maxLines: 2,
-            onChanged: (value) => _updateRow(index, 'description', value),
-          ),
-          const SizedBox(height: 12),
-          if (isMobile) ...[
-            _buildTextField(
-              controller: _quotationRows[index]['qtyController'],
-              label: languageProvider.isEnglish ? 'Quantity' : 'مقدار',
-              icon: Icons.numbers,
-              keyboardType: TextInputType.number,
-              onChanged: (value) =>
-                  _updateRow(index, 'qty', double.tryParse(value) ?? 0.0),
-            ),
-            const SizedBox(height: 12),
-            _buildTextField(
-              controller: _quotationRows[index]['rateController'],
-              label: languageProvider.isEnglish ? 'Rate' : 'ریٹ',
-              icon: Icons.attach_money,
-              keyboardType: TextInputType.number,
-              onChanged: (value) =>
-                  _updateRow(index, 'rate', double.tryParse(value) ?? 0.0),
-            ),
-            const SizedBox(height: 12),
-            _buildTextField(
-              controller: TextEditingController(
-                text: (_quotationRows[index]['total'] ?? 0.0).toStringAsFixed(
-                    2),
-              ),
-              label: languageProvider.isEnglish ? 'Total' : 'کل',
-              icon: Icons.calculate,
-              readOnly: true,
-            ),
-          ] else
-            Row(
-              children: [
-                Expanded(
-                  child: _buildTextField(
-                    controller: _quotationRows[index]['qtyController'],
-                    label: languageProvider.isEnglish ? 'Quantity' : 'مقدار',
-                    icon: Icons.numbers,
-                    keyboardType: TextInputType.number,
-                    onChanged: (value) =>
-                        _updateRow(index, 'qty', double.tryParse(value) ?? 0.0),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _buildTextField(
-                    controller: _quotationRows[index]['rateController'],
-                    label: languageProvider.isEnglish ? 'Rate' : 'ریٹ',
-                    icon: Icons.attach_money,
-                    keyboardType: TextInputType.number,
-                    onChanged: (value) =>
-                        _updateRow(
-                            index, 'rate', double.tryParse(value) ?? 0.0),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _buildTextField(
-                    controller: TextEditingController(
-                      text: (_quotationRows[index]['total'] ?? 0.0)
-                          .toStringAsFixed(2),
-                    ),
-                    label: languageProvider.isEnglish ? 'Total' : 'کل',
-                    icon: Icons.calculate,
-                    readOnly: true,
-                  ),
-                ),
-              ],
-            ),
-        ],
       ),
     );
   }
@@ -1438,8 +1641,6 @@ class _QuotationPageState extends State<QuotationPage> {
     );
   }
 
-
-// Helper methods
   Future<void> _selectDate(BuildContext context) async {
     final picked = await showDatePicker(
       context: context,
@@ -1504,17 +1705,20 @@ class ResponsiveLayout extends StatelessWidget {
   }
 }
 
+
 class CustomAutocomplete extends StatelessWidget {
   final List<Item> items;
   final TextEditingController controller;
   final Function(Item) onSelected;
   final String? selectedCustomerId;
+  final bool allowManualEntry;
 
   const CustomAutocomplete({
     required this.items,
     required this.controller,
     required this.onSelected,
     required this.selectedCustomerId,
+    this.allowManualEntry = true,
   });
 
   @override
@@ -1541,9 +1745,25 @@ class CustomAutocomplete extends StatelessWidget {
         return TextField(
           controller: textEditingController,
           focusNode: focusNode,
-          decoration: const InputDecoration(labelText: 'Item'),
+          decoration: InputDecoration(
+            labelText: 'Item',
+            suffixIcon: IconButton(
+              icon: Icon(Icons.search),
+              onPressed: () => _showItemSearchDialog(context),
+            ),
+          ),
           onChanged: (value) {
             controller.text = value;
+            if (allowManualEntry && value.isNotEmpty) {
+              // Create a temporary item for manual entry
+              onSelected(Item(
+                id: 'manual_${DateTime.now().millisecondsSinceEpoch}',
+                itemName: value,
+                costPrice: 0.0,
+                salePrice: 0.0,
+                qtyOnHand: 0,
+              ));
+            }
           },
         );
       },
@@ -1556,14 +1776,21 @@ class CustomAutocomplete extends StatelessWidget {
             separatorBuilder: (context, index) => Divider(height: 1),
             itemBuilder: (context, index) {
               final option = options.elementAt(index);
-              final customerPrice = option.getPriceForCustomer(selectedCustomerId);
-              final isSpecialPrice = customerPrice != option.costPrice;
+              // Show customer price if customer is selected, otherwise show sale price
+              final displayPrice = selectedCustomerId != null
+                  ? option.getPriceForCustomer(selectedCustomerId)
+                  : option.salePrice;
+
+              final isSpecialPrice = selectedCustomerId != null &&
+                  displayPrice != option.costPrice;
 
               return ListTile(
                 title: Text(option.itemName),
-                subtitle: isSpecialPrice ? Text('Special Price for Customer') : null,
+                subtitle: isSpecialPrice
+                    ? Text('Special Price for Customer')
+                    : null,
                 trailing: Text(
-                  '\$${customerPrice.toStringAsFixed(2)}',
+                  '${displayPrice.toStringAsFixed(2)}rs',
                   style: TextStyle(
                     fontWeight: isSpecialPrice ? FontWeight.bold : FontWeight.normal,
                     color: isSpecialPrice ? Colors.green : Colors.black,
@@ -1579,17 +1806,146 @@ class CustomAutocomplete extends StatelessWidget {
         );
       },
       onSelected: (Item selection) {
-        if (selectedCustomerId == null) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Please select a customer first')),
-          );
-          return;
-        }
+        // Use customer price if customer is selected, otherwise use sale price
+        final selectedPrice = selectedCustomerId != null
+            ? selection.getPriceForCustomer(selectedCustomerId)
+            : selection.salePrice;
 
-        final customerPrice = selection.getPriceForCustomer(selectedCustomerId);
         controller.text = selection.itemName;
-        onSelected(selection.copyWith(costPrice: customerPrice));
+        onSelected(selection.copyWith(
+          costPrice: selectedPrice,
+          salePrice: selectedPrice,
+        ));
       },
     );
+  }
+
+  void _showItemSearchDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          insetPadding: const EdgeInsets.all(16),
+          child: Container(
+            width: double.maxFinite,
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  decoration: InputDecoration(
+                    labelText: 'Search Items',
+                    prefixIcon: Icon(Icons.search),
+                    border: OutlineInputBorder(),
+                  ),
+                  onChanged: (value) {
+                    // You can add search filtering here if needed
+                  },
+                ),
+                const SizedBox(height: 16),
+                Expanded(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: items.length,
+                    itemBuilder: (context, index) {
+                      final item = items[index];
+                      // Determine which price to show
+                      final displayPrice = selectedCustomerId != null
+                          ? item.getPriceForCustomer(selectedCustomerId)
+                          : item.salePrice;
+
+                      final isSpecialPrice = selectedCustomerId != null &&
+                          displayPrice != item.costPrice;
+
+                      return ListTile(
+                        leading: GestureDetector(
+                          onTap: () {
+                            if (item.imageBase64 != null && item.imageBase64!.isNotEmpty) {
+                              _showImagePreview(context, item.imageBase64!);
+                            }
+                          },
+                          child: item.imageBase64 != null && item.imageBase64!.isNotEmpty
+                              ? CircleAvatar(
+                            backgroundImage: MemoryImage(base64Decode(item.imageBase64!)),
+                            radius: 20,
+                          )
+                              : CircleAvatar(
+                            backgroundColor: Colors.grey[200],
+                            radius: 20,
+                            child: Icon(Icons.inventory, size: 20),
+                          ),
+                        ),
+                        title: Text(item.itemName),
+                        subtitle: Text('${displayPrice.toStringAsFixed(2)}rs'),
+                        trailing: ElevatedButton(
+                          onPressed: () {
+                            final selectedPrice = selectedCustomerId != null
+                                ? item.getPriceForCustomer(selectedCustomerId)
+                                : item.salePrice;
+
+                            controller.text = item.itemName;
+                            onSelected(item.copyWith(
+                              costPrice: selectedPrice,
+                              salePrice: selectedPrice,
+                            ));
+                            Navigator.pop(context);
+                          },
+                          child: Icon(Icons.add),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: Text('Close'),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showImagePreview(BuildContext context, String base64Image) {
+    try {
+      final decodedImage = base64Decode(base64Image);
+
+      showDialog(
+        context: context,
+        builder: (_) => Dialog(
+          insetPadding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                constraints: BoxConstraints(maxHeight: 400, maxWidth: 400),
+                padding: const EdgeInsets.all(12),
+                child: Image.memory(
+                  decodedImage,
+                  fit: BoxFit.contain,
+                  errorBuilder: (context, error, stackTrace) {
+                    return Padding(
+                      padding: const EdgeInsets.all(24.0),
+                      child: Text('Error loading image'),
+                    );
+                  },
+                ),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Close'),
+              ),
+            ],
+          ),
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to preview image: $e')),
+      );
+    }
   }
 }

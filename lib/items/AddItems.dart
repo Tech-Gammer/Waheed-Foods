@@ -72,11 +72,18 @@ class _RegisterItemPageState extends State<RegisterItemPage> {
   @override
   void initState() {
     super.initState();
+
+
+
     _itemNameController = TextEditingController(text: widget.itemData?['itemName'] ?? '');
     _costPriceController = TextEditingController(text: widget.itemData?['costPrice']?.toString() ?? '');
     _salePriceController = TextEditingController(text: widget.itemData?['salePrice']?.toString() ?? '');
     _qtyOnHandController = TextEditingController(text: widget.itemData?['qtyOnHand']?.toString() ?? '');
     _weightPerBagController = TextEditingController(text: widget.itemData?['weightPerBag']?.toString() ?? '');
+
+    // Add listeners for price per kg calculation
+    _salePriceController.addListener(_calculatePricePerKg);
+    _weightPerBagController.addListener(_calculatePricePerKg);
 
     _selectedUnit = widget.itemData?['unit'];
     _selectedVendor = widget.itemData?['vendor'];
@@ -94,8 +101,14 @@ class _RegisterItemPageState extends State<RegisterItemPage> {
       // Initialize BOM components if editing a BOM
       if (widget.itemData!['isBOM'] == true) {
         _isBOM = true;
-        if (widget.itemData!['components'] != null) {
-          _bomComponents = List<Map<String, dynamic>>.from(widget.itemData!['components']);
+        final rawComponents = widget.itemData!['components'];
+        if (rawComponents != null && rawComponents is List) {
+          _bomComponents = rawComponents.map((component) {
+            if (component is Map) {
+              return Map<String, dynamic>.from(component);
+            }
+            return <String, dynamic>{};
+          }).toList();
         }
       }
     }
@@ -1314,6 +1327,23 @@ class _RegisterItemPageState extends State<RegisterItemPage> {
     _customerSearchController.dispose();
     _bomItemSearchController.dispose();
     _componentQtyController.dispose();
+    _salePriceController.removeListener(_calculatePricePerKg);
+    _weightPerBagController.removeListener(_calculatePricePerKg);
     super.dispose();
   }
+
+  void _calculatePricePerKg() {
+    final salePrice = double.tryParse(_salePriceController.text) ?? 0;
+    final weight = double.tryParse(_weightPerBagController.text) ?? 1;
+
+    // Avoid division by zero
+    final pricePerKg = weight > 0 ? salePrice / weight : 0;
+
+    // Update the UI by calling setState
+    setState(() {
+      // The price per kg is already displayed in the UI through the Text widget
+      // so we just need to trigger a rebuild
+    });
+  }
+
 }

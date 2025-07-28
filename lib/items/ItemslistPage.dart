@@ -252,7 +252,50 @@ class _ItemsListPageState extends State<ItemsListPage> {
     }
   }
 
+  // void updateItem(Map<String, dynamic> item) {
+  //   Navigator.push(
+  //     context,
+  //     MaterialPageRoute(
+  //       builder: (context) => RegisterItemPage(
+  //         itemData: {
+  //           'key': item['key'],
+  //           'itemName': item['itemName'],
+  //           'image': item['image'],
+  //           'unit': item['unit'] ?? '', // Handle null for BOM
+  //           'costPrice': item['costPrice'] ?? 0.0, // Handle null for BOM
+  //           'salePrice': item['salePrice'] ?? 0.0,
+  //           'qtyOnHand': item['qtyOnHand'] ?? 0,
+  //           'vendor': item['vendor'] ?? '', // Handle null for BOM
+  //           'category': item['category'] ?? '', // Handle null for BOM
+  //           'weightPerBag': item['weightPerBag'] ?? 1.0,
+  //           'customerBasePrices': item['customerBasePrices'], // May be null for BOM
+  //           'isBOM': item['isBOM'] ?? false, // Add this field
+  //           'components': item['components'], // For BOM items
+  //         },
+  //       ),
+  //     ),
+  //   );
+  // }
+
   void updateItem(Map<String, dynamic> item) {
+    // Safely convert components to List<Map<String, dynamic>>
+    List<Map<String, dynamic>>? components;
+    if (item['components'] != null) {
+      try {
+        final rawComponents = item['components'];
+        if (rawComponents is List) {
+          components = rawComponents.map((component) {
+            if (component is Map) {
+              return Map<String, dynamic>.from(component);
+            }
+            return <String, dynamic>{};
+          }).toList();
+        }
+      } catch (e) {
+        print('Error converting components: $e');
+      }
+    }
+
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -261,21 +304,24 @@ class _ItemsListPageState extends State<ItemsListPage> {
             'key': item['key'],
             'itemName': item['itemName'],
             'image': item['image'],
-            'unit': item['unit'] ?? '', // Handle null for BOM
-            'costPrice': item['costPrice'] ?? 0.0, // Handle null for BOM
+            'unit': item['unit'] ?? '',
+            'costPrice': item['costPrice'] ?? 0.0,
             'salePrice': item['salePrice'] ?? 0.0,
             'qtyOnHand': item['qtyOnHand'] ?? 0,
-            'vendor': item['vendor'] ?? '', // Handle null for BOM
-            'category': item['category'] ?? '', // Handle null for BOM
+            'vendor': item['vendor'] ?? '',
+            'category': item['category'] ?? '',
             'weightPerBag': item['weightPerBag'] ?? 1.0,
-            'customerBasePrices': item['customerBasePrices'], // May be null for BOM
-            'isBOM': item['isBOM'] ?? false, // Add this field
-            'components': item['components'], // For BOM items
+            'customerBasePrices': item['customerBasePrices'] is Map
+                ? Map<String, dynamic>.from(item['customerBasePrices'])
+                : null,
+            'isBOM': item['isBOM'] ?? false,
+            'components': components, // Use the converted components
           },
         ),
       ),
     );
   }
+
 
   void _confirmDelete(String key) {
     final languageProvider = Provider.of<LanguageProvider>(context, listen: false);
@@ -446,110 +492,143 @@ class _ItemsListPageState extends State<ItemsListPage> {
                 ),
                 child: Padding(
                   padding: EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                    Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text("Inventory Information",
-                          style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                              color: _primaryColor,
-                              fontWeight: FontWeight.bold
-                          )),
-                      if (_selectedItem!['isBOM'] == true)
-                        Chip(
-                          label: Text("BOM"),
-                          backgroundColor: Colors.blue[100],
-                        ),
-                      IconButton(
-                        icon: Icon(Icons.attach_money, color: _secondaryColor),
-                        onPressed: () => _showCustomerRates(_selectedItem!),
-                      ),
-                    ],
-                  ),
-                  Divider(color: _primaryColor.withOpacity(0.3)),
-                  SizedBox(height: 16),
-                      _buildDetailRow("Item Name", _selectedItem!['itemName']?.toString() ?? 'N/A'),
-                      if (_selectedItem!['isBOM'] != true) ...[
-                        _buildDetailRow("Cost Price", _selectedItem!['costPrice']?.toString() ?? 'N/A'),
-                        _buildDetailRow("Unit", _selectedItem!['unit']?.toString() ?? 'N/A'),
-                        _buildDetailRow("Vendor", _selectedItem!['vendor']?.toString() ?? 'N/A'),
-                      ],
-                      _buildDetailRow("Sale Price", _selectedItem!['salePrice']?.toString() ?? 'N/A'),
-                      _buildDetailRow("Quantity", _selectedItem!['qtyOnHand']?.toString() ?? 'N/A'),
-                      _buildDetailRow("Category", _selectedItem!['category']?.toString() ?? 'N/A'),
-                      if (_selectedItem!['isBOM'] == true) ...[
-                        SizedBox(height: 16),
-                        Text("Components:",
-                            style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16,
-                                color: _primaryColor)),
-                        SizedBox(height: 8),
-                        Container(
-                          height: 350, // Fixed height for the components list
-                          decoration: BoxDecoration(
-                            border: Border.all(color: Colors.grey[300]!),
-                            borderRadius: BorderRadius.circular(8),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      return SingleChildScrollView(
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            minHeight: constraints.maxHeight,
                           ),
-                          child: _selectedItem!['components'] == null
-                              ? Center(child: Text("No components"))
-                              : ListView.builder(
-                            padding: EdgeInsets.all(8),
-                            itemCount: _selectedItem!['components'].length,
-                            itemBuilder: (context, index) {
-                              final component = _selectedItem!['components'][index];
-                              return Card(
-                                margin: EdgeInsets.symmetric(vertical: 4),
-                                elevation: 2,
-                                child: ListTile(
-                                  contentPadding: EdgeInsets.symmetric(horizontal: 12),
-                                  title: Text(component['name'] ?? 'Unnamed component'),
-                                  subtitle: Text(
-                                      '${component['quantity']} ${component['unit']}'),
-                                  trailing: Text(
-                                      '${(component['price'] * component['quantity']).toStringAsFixed(2)} PKR'),
+                          child: IntrinsicHeight(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text("Inventory Information",
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .titleLarge
+                                            ?.copyWith(
+                                            color: _primaryColor,
+                                            fontWeight: FontWeight.bold)),
+                                    if (_selectedItem!['isBOM'] == true)
+                                      Chip(
+                                        label: Text("BOM"),
+                                        backgroundColor: Colors.blue[100],
+                                      ),
+                                    IconButton(
+                                      icon: Icon(Icons.attach_money,
+                                          color: _secondaryColor),
+                                      onPressed: () =>
+                                          _showCustomerRates(_selectedItem!),
+                                    ),
+                                  ],
                                 ),
-                              );
-                            },
-                          ),
-                        ),
-                      ],
-                  Spacer(),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: _primaryColor,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                        ),
-                        child: Text("Edit", style: TextStyle(color: Colors.white)),
-                        onPressed: () => updateItem(_selectedItem!),
-                      ),
-                        SizedBox(width: 10),
-                        ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.red,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
+                                Divider(color: _primaryColor.withOpacity(0.3)),
+                                SizedBox(height: 16),
+                                _buildDetailRow("Item Name",
+                                    _selectedItem!['itemName']?.toString() ?? 'N/A'),
+                                if (_selectedItem!['isBOM'] != true) ...[
+                                  _buildDetailRow("Cost Price",
+                                      _selectedItem!['costPrice']?.toString() ?? 'N/A'),
+                                  _buildDetailRow("Unit",
+                                      _selectedItem!['unit']?.toString() ?? 'N/A'),
+                                  _buildDetailRow("Vendor",
+                                      _selectedItem!['vendor']?.toString() ?? 'N/A'),
+                                ],
+                                _buildDetailRow("Sale Price",
+                                    _selectedItem!['salePrice']?.toString() ?? 'N/A'),
+                                _buildDetailRow("Quantity",
+                                    _selectedItem!['qtyOnHand']?.toString() ?? 'N/A'),
+                                _buildDetailRow("Category",
+                                    _selectedItem!['category']?.toString() ?? 'N/A'),
+                                if (_selectedItem!['isBOM'] == true) ...[
+                                  SizedBox(height: 16),
+                                  Text("Components:",
+                                      style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 16,
+                                          color: _primaryColor)),
+                                  SizedBox(height: 8),
+                                  Container(
+                                    height: 350,
+                                    decoration: BoxDecoration(
+                                      border:
+                                      Border.all(color: Colors.grey[300]!),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: _selectedItem!['components'] == null
+                                        ? Center(child: Text("No components"))
+                                        : ListView.builder(
+                                      padding: EdgeInsets.all(8),
+                                      itemCount:
+                                      _selectedItem!['components'].length,
+                                      itemBuilder: (context, index) {
+                                        final component =
+                                        _selectedItem!['components']
+                                        [index];
+                                        return Card(
+                                          margin: EdgeInsets.symmetric(
+                                              vertical: 4),
+                                          elevation: 2,
+                                          child: ListTile(
+                                            contentPadding:
+                                            EdgeInsets.symmetric(
+                                                horizontal: 12),
+                                            title: Text(component['name'] ??
+                                                'Unnamed component'),
+                                            subtitle: Text(
+                                                '${component['quantity']} ${component['unit']}'),
+                                            trailing: Text(
+                                                '${(component['price'] * component['quantity']).toStringAsFixed(2)} PKR'),
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                ],
+                                Spacer(),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.end,
+                                  children: [
+                                    ElevatedButton(
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: _primaryColor,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                      ),
+                                      child: Text("Edit",
+                                          style: TextStyle(color: Colors.white)),
+                                      onPressed: () => updateItem(_selectedItem!),
+                                    ),
+                                    SizedBox(width: 10),
+                                    ElevatedButton(
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.red,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                      ),
+                                      child: Text("Delete",
+                                          style: TextStyle(color: Colors.white)),
+                                      onPressed: () =>
+                                          _confirmDelete(_selectedItem!['key']),
+                                    ),
+                                  ],
+                                ),
+                              ],
                             ),
                           ),
-                          child: Text("Delete", style: TextStyle(color: Colors.white)),
-                          onPressed: () => _confirmDelete(_selectedItem!['key']),
                         ),
-                        ],
-                      ),
-                    ],
+                      );
+                    },
                   ),
                 ),
               ),
             ),
-
-
             /// Right Panel (Optional) – Image, etc.
         Expanded(
           flex: 2,
