@@ -13,6 +13,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'dart:ui' as ui;
 import '../Provider/lanprovider.dart';
+import '../Purchase/wastage recordpage.dart';
 import 'AddItems.dart';
 
 class ItemsListPage extends StatefulWidget {
@@ -594,6 +595,18 @@ class _ItemsListPageState extends State<ItemsListPage> {
                                   mainAxisAlignment: MainAxisAlignment.end,
                                   children: [
                                     ElevatedButton(
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.blue,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                    ),
+                                    child: Text("Wastage",
+                                        style: TextStyle(color: Colors.white)),
+                                    onPressed: () => _navigateToWastageRecords(_selectedItem!),
+                                  ),
+                                    SizedBox(width: 10),
+                                    ElevatedButton(
                                       style: ElevatedButton.styleFrom(
                                         backgroundColor: _primaryColor,
                                         shape: RoundedRectangleBorder(
@@ -843,18 +856,19 @@ class _ItemsListPageState extends State<ItemsListPage> {
   }
 
 
+  void _navigateToWastageRecords(Map<String, dynamic> item) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => WastageRecordsPage(
+          itemKey: item['key'],
+          itemName: item['itemName'],
+        ),
+      ),
+    );
+  }
+
   void _showCustomerRates(Map<String, dynamic> item) {
-
-
-    if (item['isBOM'] == true) {
-      final languageProvider = Provider.of<LanguageProvider>(context, listen: false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(languageProvider.isEnglish
-            ? "BOM items don't have customer prices"
-            : "BOM آئٹمز میں کسٹمر قیمتیں نہیں ہوتیں")),
-      );
-      return;
-    }
     // Safely get and convert customerBasePrices
     final rawPrices = item['customerBasePrices'];
     final Map<String, dynamic> customerPrices = {};

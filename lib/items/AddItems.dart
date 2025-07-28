@@ -69,6 +69,10 @@ class _RegisterItemPageState extends State<RegisterItemPage> {
   Map<String, double> _customerBasePrices = {};
   List<Map<String, dynamic>> _customerPricesList = [];
 
+  double get totalCost {
+    return _bomComponents.fold(0.0, (sum, item) => sum + (item['price'] * item['quantity']));
+  }
+
   @override
   void initState() {
     super.initState();
@@ -267,17 +271,27 @@ class _RegisterItemPageState extends State<RegisterItemPage> {
   }
 
   void _updateCustomerPricesList() {
-    if (_customerBasePrices.isEmpty) return;
-
     setState(() {
+      if (_customerBasePrices.isEmpty) {
+        _customerPricesList.clear();
+        return;
+      }
+
       _customerPricesList = _customerBasePrices.entries.map((entry) {
         String customerId = entry.key;
         double price = entry.value;
 
-        String customerName = _customers.firstWhere(
-              (c) => c['id'] == customerId,
-          orElse: () => {'name': 'Unknown Customer'},
-        )['name'];
+        // Find customer name - handle case where customer might not exist
+        String customerName = 'Unknown Customer';
+        try {
+          final customer = _customers.firstWhere(
+                (c) => c['id'] == customerId,
+          );
+          customerName = customer['name'] ?? 'Unknown Customer';
+        } catch (e) {
+          // Customer not found in the list
+          print('Customer not found for ID: $customerId');
+        }
 
         return {
           'customerId': customerId,
@@ -356,15 +370,27 @@ class _RegisterItemPageState extends State<RegisterItemPage> {
     }
 
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Price added for $customerName: \$${price.toStringAsFixed(2)}')),
+      SnackBar(content: Text('Price added for $customerName: ${price.toStringAsFixed(2)}rs')),
     );
   }
 
   void _removeCustomerPrice(String customerId) {
+    print('Before removal - customerBasePrices: $_customerBasePrices');
+    print('Before removal - customerPricesList length: ${_customerPricesList.length}');
     setState(() {
+      // Remove from the base prices map
       _customerBasePrices.remove(customerId);
+
+      // Also remove directly from the display list to ensure immediate UI update
+      _customerPricesList.removeWhere((customer) => customer['customerId'] == customerId);
     });
-    _updateCustomerPricesList();
+
+    print('After removal - customerBasePrices: $_customerBasePrices');
+    print('After removal - customerPricesList length: ${_customerPricesList.length}');
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Customer price removed successfully')),
+    );
   }
 
   void _addBomComponent(Map<String, dynamic> item, double quantity) {
@@ -387,6 +413,7 @@ class _RegisterItemPageState extends State<RegisterItemPage> {
     });
   }
 
+
   void _showAddCustomerPriceDialog(String customerId, String customerName) {
     TextEditingController priceController = TextEditingController();
     final languageProvider = Provider.of<LanguageProvider>(context, listen: false);
@@ -395,14 +422,35 @@ class _RegisterItemPageState extends State<RegisterItemPage> {
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: Text(languageProvider.isEnglish ? 'Set Price for $customerName' : '$customerName کے لیے قیمت مقرر کریں'),
-          content: TextFormField(
-            controller: priceController,
-            keyboardType: TextInputType.number,
-            decoration: InputDecoration(
-              labelText: languageProvider.isEnglish ? 'Price' : 'قیمت',
-              border: OutlineInputBorder(),
-            ),
+          title: Text(languageProvider.isEnglish
+              ? 'Set Price for $customerName'
+              : '$customerName کے لیے قیمت مقرر کریں'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (_isBOM) ...[
+                Text('BOM Components Total: ${totalCost.toStringAsFixed(2)} PKR'),
+                SizedBox(height: 8),
+              ],
+              Text(
+                _isBOM
+                    ? (languageProvider.isEnglish
+                    ? 'Enter final price for this customer'
+                    : 'اس کسٹمر کے لیے حتمی قیمت درج کریں')
+                    : (languageProvider.isEnglish
+                    ? 'Enter price for this customer'
+                    : 'اس کسٹمر کے لیے قیمت درج کریں'),
+              ),
+              TextFormField(
+                controller: priceController,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  labelText: languageProvider.isEnglish ? 'Price (PKR)' : 'قیمت (روپے)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
           ),
           actions: [
             TextButton(
@@ -417,7 +465,9 @@ class _RegisterItemPageState extends State<RegisterItemPage> {
                   Navigator.pop(context);
                 } else {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text(languageProvider.isEnglish ? 'Please enter a valid price' : 'براہ کرم ایک درست قیمت درج کریں')),
+                    SnackBar(content: Text(languageProvider.isEnglish
+                        ? 'Please enter a valid positive price'
+                        : 'براہ کرم ایک درست مثبت قیمت درج کریں')),
                   );
                 }
               },
@@ -455,7 +505,8 @@ class _RegisterItemPageState extends State<RegisterItemPage> {
             TextButton(
               onPressed: () {
                 double? qty = double.tryParse(qtyController.text);
-                if (qty != null && qty > 0) {
+                // if (qty != null && qty > 0) {
+                if (qty != null) {  // Removed the qty > 0 check to allow negatives
                   _addBomComponent(item, qty);
                   Navigator.pop(context);
                 } else {
@@ -530,6 +581,9 @@ class _RegisterItemPageState extends State<RegisterItemPage> {
         }
       }
 
+      Map<String, double> customerPrices = Map.from(_customerBasePrices);
+
+
       final newItem = {
         'itemName': itemName,
         'unit': _selectedUnit,
@@ -540,7 +594,7 @@ class _RegisterItemPageState extends State<RegisterItemPage> {
         'qtyOnHand': int.tryParse(_qtyOnHandController.text) ?? 0,
         'vendor': _selectedVendor,
         'category': _selectedCategory,
-        'customerBasePrices': _customerBasePrices,
+        'customerBasePrices': customerPrices,
         'image': _imageBase64,
         'isBOM': _isBOM,
         'components': _isBOM ? _bomComponents : null,
@@ -629,15 +683,23 @@ class _RegisterItemPageState extends State<RegisterItemPage> {
       itemCount: _bomComponents.length,
       itemBuilder: (context, index) {
         final component = _bomComponents[index];
+        final isDeduction = component['quantity'] < 0;
+
         return Card(
           margin: EdgeInsets.symmetric(vertical: 4),
+          color: isDeduction ? Colors.red[50] : null,
           child: ListTile(
             title: Text(component['name']),
             subtitle: Text('${component['quantity']} ${component['unit']}'),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text('${(component['price'] * component['quantity']).toStringAsFixed(2)} PKR'),
+                Text(
+                  '${(component['price'] * component['quantity']).toStringAsFixed(2)} PKR',
+                  style: TextStyle(
+                    color: isDeduction ? Colors.red : null,
+                  ),
+                ),
                 IconButton(
                   icon: Icon(Icons.delete, color: Colors.red),
                   onPressed: () => _removeBomComponent(index),
@@ -653,6 +715,12 @@ class _RegisterItemPageState extends State<RegisterItemPage> {
   @override
   Widget build(BuildContext context) {
     final languageProvider = Provider.of<LanguageProvider>(context);
+
+    double additions = _bomComponents.where((c) => c['quantity'] > 0)
+        .fold(0.0, (sum, item) => sum + (item['price'] * item['quantity']));
+    double deductions = _bomComponents.where((c) => c['quantity'] < 0)
+        .fold(0.0, (sum, item) => sum + (item['price'] * item['quantity']).abs());
+
 
     return Scaffold(
       appBar: AppBar(
@@ -865,24 +933,39 @@ class _RegisterItemPageState extends State<RegisterItemPage> {
                             SizedBox(height: 10),
                             _buildBomComponentsList(),
                             SizedBox(height: 10),
-                            if (_bomComponents.isNotEmpty)
-                              Text(
-                                languageProvider.isEnglish
-                                    ? 'Total Estimated Cost: ${(_bomComponents.fold(0.0, (sum, item) => sum + (item['price'] * item['quantity']))).toStringAsFixed(2)} PKR'
-                                    : 'کل تخمینہ لاگت: ${(_bomComponents.fold(0.0, (sum, item) => sum + (item['price'] * item['quantity'])).toStringAsFixed(2))} روپے',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 16,
-                                  color: Colors.blue,
-                                ),
+                            if (_bomComponents.isNotEmpty) ...[
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    languageProvider.isEnglish
+                                        ? 'Total Estimated Cost: ${totalCost.toStringAsFixed(2)} PKR'
+                                        : 'کل تخمینہ لاگت: ${totalCost.toStringAsFixed(2)} روپے',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 16,
+                                      color: Colors.blue,
+                                    ),
+                                  ),
+                                  SizedBox(height: 4),
+                                  Text(
+                                    languageProvider.isEnglish
+                                        ? '(Additions: ${additions.toStringAsFixed(2)} PKR, Deductions: ${deductions.toStringAsFixed(2)} PKR)'
+                                        : '(اضافے: ${additions.toStringAsFixed(2)} روپے, کٹوتیاں: ${deductions.toStringAsFixed(2)} روپے)',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.grey,
+                                    ),
+                                  ),
+                                ],
                               ),
+                            ],
                           ],
                         ),
                       ),
                     ),
                     SizedBox(height: 20),
                   ],
-
                   // Item-specific fields (shown when not in BOM mode)
                   if (!_isBOM) ...[
                     DropdownButtonFormField<String>(
@@ -967,16 +1050,18 @@ class _RegisterItemPageState extends State<RegisterItemPage> {
                     },
                   ),
                   SizedBox(height: 16),
+
                   Text(
                     languageProvider.isEnglish
-                        ? 'Per KG Price: ${(double.tryParse(_salePriceController.text) ?? 0) / (double.tryParse(_weightPerBagController.text) ?? 1)} PKR'
-                        : 'فی کلو قیمت: ${(double.tryParse(_salePriceController.text) ?? 0) / (double.tryParse(_weightPerBagController.text) ?? 1)} روپے',
+                        ? 'Per KG Price: ${( (double.tryParse(_salePriceController.text) ?? 0) / (double.tryParse(_weightPerBagController.text) ?? 1) ).toStringAsFixed(2)} PKR'
+                        : 'فی کلو قیمت: ${( (double.tryParse(_salePriceController.text) ?? 0) / (double.tryParse(_weightPerBagController.text) ?? 1) ).toStringAsFixed(2)} روپے',
                     style: TextStyle(
                       fontWeight: FontWeight.bold,
                       fontSize: 16,
                       color: Colors.orange[300],
                     ),
                   ),
+
                   SizedBox(height: 16),
                   TextFormField(
                     controller: _qtyOnHandController,
@@ -1164,128 +1249,292 @@ class _RegisterItemPageState extends State<RegisterItemPage> {
                   ),
                   SizedBox(height: 20),
 
-                  // Customer Base Prices Section (only for items)
-                  if (!_isBOM) ...[
-                    Card(
-                      elevation: 4,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
+                  // // Customer Base Prices Section (only for items)
+                  // if (!_isBOM) ...[
+                  //   Card(
+                  //     elevation: 4,
+                  //     shape: RoundedRectangleBorder(
+                  //       borderRadius: BorderRadius.circular(12),
+                  //     ),
+                  //     child: Padding(
+                  //       padding: const EdgeInsets.all(16.0),
+                  //       child: Column(
+                  //         crossAxisAlignment: CrossAxisAlignment.start,
+                  //         children: [
+                  //           Text(
+                  //             languageProvider.isEnglish
+                  //                 ? 'Customer Base Prices'
+                  //                 : 'کسٹمر کی بنیادی قیمتیں',
+                  //             style: TextStyle(
+                  //               fontSize: 18,
+                  //               fontWeight: FontWeight.bold,
+                  //             ),
+                  //           ),
+                  //           SizedBox(height: 10),
+                  //
+                  //           if (_isLoadingCustomers)
+                  //             Center(child: CircularProgressIndicator())
+                  //           else if (_customers.isNotEmpty)
+                  //             Column(
+                  //               children: [
+                  //                 TextField(
+                  //                   controller: _customerSearchController,
+                  //                   decoration: InputDecoration(
+                  //                     hintText: languageProvider.isEnglish
+                  //                         ? 'Search customers...'
+                  //                         : 'کسٹمرز تلاش کریں...',
+                  //                     border: OutlineInputBorder(
+                  //                       borderRadius: BorderRadius.circular(8),
+                  //                     ),
+                  //                     prefixIcon: Icon(Icons.search),
+                  //                   ),
+                  //                 ),
+                  //                 SizedBox(height: 10),
+                  //                 if (_customerSearchController.text.isNotEmpty)
+                  //                   Container(
+                  //                     height: 150,
+                  //                     decoration: BoxDecoration(
+                  //                       border: Border.all(color: Colors.grey),
+                  //                       borderRadius: BorderRadius.circular(8),
+                  //                     ),
+                  //                     child: ListView.builder(
+                  //                       itemCount: _filteredCustomers.length,
+                  //                       itemBuilder: (context, index) {
+                  //                         final customer = _filteredCustomers[index];
+                  //                         final isAlreadyAdded = _customerBasePrices.containsKey(customer['id']);
+                  //                         return ListTile(
+                  //                           title: Text(customer['name']),
+                  //                           subtitle: Text(customer['phone'] ?? ''),
+                  //                           trailing: isAlreadyAdded
+                  //                               ? Icon(Icons.check, color: Colors.green)
+                  //                               : Icon(Icons.add, color: Colors.orange[300]),
+                  //                           onTap: isAlreadyAdded
+                  //                               ? null
+                  //                               : () => _showAddCustomerPriceDialog(
+                  //                               customer['id'],
+                  //                               customer['name']
+                  //                           ),
+                  //                         );
+                  //                       },
+                  //                     ),
+                  //                   ),
+                  //               ],
+                  //             ),
+                  //
+                  //           SizedBox(height: 20),
+                  //
+                  //           if (_customerPricesList.isNotEmpty) ...[
+                  //             Text(
+                  //               languageProvider.isEnglish
+                  //                   ? 'Added Customer Prices:'
+                  //                   : 'شامل کردہ کسٹمر کی قیمتیں:',
+                  //               style: TextStyle(
+                  //                 fontSize: 16,
+                  //                 fontWeight: FontWeight.bold,
+                  //               ),
+                  //             ),
+                  //             SizedBox(height: 10),
+                  //             ListView.builder(
+                  //               shrinkWrap: true,
+                  //               physics: NeverScrollableScrollPhysics(),
+                  //               itemCount: _customerPricesList.length,
+                  //               itemBuilder: (context, index) {
+                  //                 final customerPrice = _customerPricesList[index];
+                  //                 return Card(
+                  //                   margin: EdgeInsets.symmetric(vertical: 4),
+                  //                   child: ListTile(
+                  //                     title: Text(customerPrice['customerName']),
+                  //                     subtitle: Text(
+                  //                         '${languageProvider.isEnglish ? 'Price: ' : 'قیمت: '}${customerPrice['price'].toStringAsFixed(2)}rs'),
+                  //                     trailing: IconButton(
+                  //                       icon: Icon(Icons.delete, color: Colors.red),
+                  //                       onPressed: () => _removeCustomerPrice(customerPrice['customerId']),
+                  //                     ),
+                  //                   ),
+                  //                 );
+                  //               },
+                  //             ),
+                  //           ] else if (_customerBasePrices.isNotEmpty && _customers.isEmpty)
+                  //             Center(
+                  //               child: Text(
+                  //                 languageProvider.isEnglish
+                  //                     ? 'Loading customer information...'
+                  //                     : 'کسٹمر کی معلومات لوڈ ہو رہی ہیں...',
+                  //                 style: TextStyle(color: Colors.grey[600]),
+                  //               ),
+                  //             ),
+                  //         ],
+                  //       ),
+                  //     ),
+                  //   ),
+                  //   SizedBox(height: 20),
+                  // ],
+                  // // Customer wise prices for BOM
+                  // if (_isBOM && _customerPricesList.isNotEmpty) ...[
+                  //   Column(
+                  //     crossAxisAlignment: CrossAxisAlignment.start,
+                  //     children: [
+                  //       Text(
+                  //         'Customer Prices for this BOM:',
+                  //         style: TextStyle(fontWeight: FontWeight.bold),
+                  //       ),
+                  //       SizedBox(height: 8),
+                  //       ..._customerPricesList.map((customerPrice) =>
+                  //           ListTile(
+                  //             title: Text(customerPrice['customerName']),
+                  //             subtitle: Text('Price: ${customerPrice['price'].toStringAsFixed(2)} PKR'),
+                  //           )
+                  //       ).toList(),
+                  //     ],
+                  //   ),
+                  // ],
+
+                  // Save button
+
+                  // Customer Base Prices Section (for both items and BOM)
+                  Card(
+                    elevation: 4,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            languageProvider.isEnglish
+                                ? 'Customer Specific Prices'
+                                : 'کسٹمر کے لیے مخصوص قیمتیں',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          SizedBox(height: 10),
+
+                          if (_isLoadingCustomers)
+                            Center(child: CircularProgressIndicator())
+                          else if (_customers.isNotEmpty)
+                            Column(
+                              children: [
+                                TextField(
+                                  controller: _customerSearchController,
+                                  decoration: InputDecoration(
+                                    hintText: languageProvider.isEnglish
+                                        ? 'Search customers...'
+                                        : 'کسٹمرز تلاش کریں...',
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    prefixIcon: Icon(Icons.search),
+                                  ),
+                                ),
+                                SizedBox(height: 10),
+                                if (_customerSearchController.text.isNotEmpty)
+                                  Container(
+                                    height: 150,
+                                    decoration: BoxDecoration(
+                                      border: Border.all(color: Colors.grey),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: ListView.builder(
+                                      itemCount: _filteredCustomers.length,
+                                      itemBuilder: (context, index) {
+                                        final customer = _filteredCustomers[index];
+                                        final isAlreadyAdded = _customerBasePrices.containsKey(customer['id']);
+                                        return ListTile(
+                                          title: Text(customer['name']),
+                                          subtitle: Text(customer['phone'] ?? ''),
+                                          trailing: isAlreadyAdded
+                                              ? Icon(Icons.check, color: Colors.green)
+                                              : Icon(Icons.add, color: Colors.orange[300]),
+                                          onTap: isAlreadyAdded
+                                              ? null
+                                              : () => _showAddCustomerPriceDialog(
+                                              customer['id'],
+                                              customer['name']
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  ),
+                              ],
+                            ),
+
+                          SizedBox(height: 20),
+
+                          if (_customerPricesList.isNotEmpty) ...[
                             Text(
                               languageProvider.isEnglish
-                                  ? 'Customer Base Prices'
-                                  : 'کسٹمر کی بنیادی قیمتیں',
+                                  ? 'Added Customer Prices:'
+                                  : 'شامل کردہ کسٹمر کی قیمتیں:',
                               style: TextStyle(
-                                fontSize: 18,
+                                fontSize: 16,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
                             SizedBox(height: 10),
-
-                            if (_isLoadingCustomers)
-                              Center(child: CircularProgressIndicator())
-                            else if (_customers.isNotEmpty)
-                              Column(
-                                children: [
-                                  TextField(
-                                    controller: _customerSearchController,
-                                    decoration: InputDecoration(
-                                      hintText: languageProvider.isEnglish
-                                          ? 'Search customers...'
-                                          : 'کسٹمرز تلاش کریں...',
-                                      border: OutlineInputBorder(
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      prefixIcon: Icon(Icons.search),
+                            ListView.builder(
+                              shrinkWrap: true,
+                              physics: NeverScrollableScrollPhysics(),
+                              itemCount: _customerPricesList.length,
+                              itemBuilder: (context, index) {
+                                final customerPrice = _customerPricesList[index];
+                                return Card(
+                                  margin: EdgeInsets.symmetric(vertical: 4),
+                                  child: ListTile(
+                                    title: Text(customerPrice['customerName']),
+                                    subtitle: Text(
+                                        '${languageProvider.isEnglish ? 'Price: ' : 'قیمت: '}${customerPrice['price'].toStringAsFixed(2)} PKR'),
+                                    trailing: IconButton(
+                                      icon: Icon(Icons.delete, color: Colors.red),
+                                      onPressed: () {
+                                        // Confirm before deleting
+                                        showDialog(
+                                          context: context,
+                                          builder: (context) => AlertDialog(
+                                            title: Text(languageProvider.isEnglish
+                                                ? 'Confirm Removal'
+                                                : 'تصدیق کریں'),
+                                            content: Text(languageProvider.isEnglish
+                                                ? 'Remove price for ${customerPrice['customerName']}?'
+                                                : 'کیا آپ ${customerPrice['customerName']} کے لیے قیمت ختم کرنا چاہتے ہیں؟'),
+                                            actions: [
+                                              TextButton(
+                                                onPressed: () => Navigator.pop(context),
+                                                child: Text(languageProvider.isEnglish ? 'Cancel' : 'منسوخ'),
+                                              ),
+                                              TextButton(
+                                                onPressed: () {
+                                                  _removeCustomerPrice(customerPrice['customerId']);
+                                                  Navigator.pop(context);
+                                                },
+                                                child: Text(languageProvider.isEnglish ? 'Remove' : 'ختم کریں'),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      },
                                     ),
                                   ),
-                                  SizedBox(height: 10),
-                                  if (_customerSearchController.text.isNotEmpty)
-                                    Container(
-                                      height: 150,
-                                      decoration: BoxDecoration(
-                                        border: Border.all(color: Colors.grey),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: ListView.builder(
-                                        itemCount: _filteredCustomers.length,
-                                        itemBuilder: (context, index) {
-                                          final customer = _filteredCustomers[index];
-                                          final isAlreadyAdded = _customerBasePrices.containsKey(customer['id']);
-                                          return ListTile(
-                                            title: Text(customer['name']),
-                                            subtitle: Text(customer['phone'] ?? ''),
-                                            trailing: isAlreadyAdded
-                                                ? Icon(Icons.check, color: Colors.green)
-                                                : Icon(Icons.add, color: Colors.orange[300]),
-                                            onTap: isAlreadyAdded
-                                                ? null
-                                                : () => _showAddCustomerPriceDialog(
-                                                customer['id'],
-                                                customer['name']
-                                            ),
-                                          );
-                                        },
-                                      ),
-                                    ),
-                                ],
-                              ),
-
-                            SizedBox(height: 20),
-
-                            if (_customerPricesList.isNotEmpty) ...[
-                              Text(
+                                );
+                              },
+                            ),
+                          ] else if (_customerBasePrices.isNotEmpty && _customers.isEmpty)
+                            Center(
+                              child: Text(
                                 languageProvider.isEnglish
-                                    ? 'Added Customer Prices:'
-                                    : 'شامل کردہ کسٹمر کی قیمتیں:',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                ),
+                                    ? 'Loading customer information...'
+                                    : 'کسٹمر کی معلومات لوڈ ہو رہی ہیں...',
+                                style: TextStyle(color: Colors.grey[600]),
                               ),
-                              SizedBox(height: 10),
-                              ListView.builder(
-                                shrinkWrap: true,
-                                physics: NeverScrollableScrollPhysics(),
-                                itemCount: _customerPricesList.length,
-                                itemBuilder: (context, index) {
-                                  final customerPrice = _customerPricesList[index];
-                                  return Card(
-                                    margin: EdgeInsets.symmetric(vertical: 4),
-                                    child: ListTile(
-                                      title: Text(customerPrice['customerName']),
-                                      subtitle: Text(
-                                          '${languageProvider.isEnglish ? 'Price: ' : 'قیمت: '}${customerPrice['price'].toStringAsFixed(2)}rs'),
-                                      trailing: IconButton(
-                                        icon: Icon(Icons.delete, color: Colors.red),
-                                        onPressed: () => _removeCustomerPrice(customerPrice['customerId']),
-                                      ),
-                                    ),
-                                  );
-                                },
-                              ),
-                            ] else if (_customerBasePrices.isNotEmpty && _customers.isEmpty)
-                              Center(
-                                child: Text(
-                                  languageProvider.isEnglish
-                                      ? 'Loading customer information...'
-                                      : 'کسٹمر کی معلومات لوڈ ہو رہی ہیں...',
-                                  style: TextStyle(color: Colors.grey[600]),
-                                ),
-                              ),
-                          ],
-                        ),
+                            ),
+                        ],
                       ),
                     ),
-                    SizedBox(height: 20),
-                  ],
-
-                  // Save button
+                  ),
+                  SizedBox(height: 20),
                   ElevatedButton(
                     onPressed: saveOrUpdateItem,
                     style: ElevatedButton.styleFrom(

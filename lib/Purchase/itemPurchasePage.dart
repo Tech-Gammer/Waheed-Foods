@@ -46,6 +46,10 @@ class _ItemPurchasePageState extends State<ItemPurchasePage> {
 
   // List to hold multiple purchase items - initialized with 5 empty items
   List<PurchaseItem> _purchaseItems = [];
+  // BOM related
+  List<Map<String, dynamic>> _bomComponents = [];
+  Map<String, double> _wastageRecords = {};
+
 
   @override
   void initState() {
@@ -91,6 +95,76 @@ class _ItemPurchasePageState extends State<ItemPurchasePage> {
     }
 
     super.dispose();
+  }
+
+  Future<Map<String, dynamic>?> fetchBomForItem(String itemName) async {
+    final item = _items.firstWhere(
+          (item) => item['itemName'].toLowerCase() == itemName.toLowerCase(),
+      orElse: () => {},
+    );
+
+    if (item.isNotEmpty && item['isBOM'] == true) {
+      return {
+        'itemName': item['itemName'],
+        'components': item['components'],
+      };
+    }
+    return null;
+  }
+
+  Future<void> recordWastage(String itemName, double quantity, String purchaseId) async {
+    final database = FirebaseDatabase.instance.ref();
+    try {
+      await database.child('wastage').push().set({
+        'itemName': itemName,
+        'quantity': quantity,
+        'date': DateTime.now().toString(),
+        'purchaseId': purchaseId,
+        'type': 'production',
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error recording wastage: $e')),
+        );
+      }
+    }
+  }
+
+  Future<Map<String, double>> checkBomComponentsForWastage(
+      String itemName, double purchasedQty)
+  async {
+    final bom = await fetchBomForItem(itemName);
+    Map<String, double> wastage = {};
+
+    if (bom != null && bom['components'] != null) {
+      final components = (bom['components'] as Map<dynamic, dynamic>).cast<String, dynamic>();
+
+      for (var componentEntry in components.entries) {
+        final componentName = componentEntry.key;
+        final componentQty = (componentEntry.value as num).toDouble();
+
+        // Calculate total component quantity needed
+        final totalComponentQty = componentQty * purchasedQty;
+
+        // Check current inventory
+        final componentItem = _items.firstWhere(
+              (item) => item['itemName'].toLowerCase() == componentName.toLowerCase(),
+          orElse: () => {},
+        );
+
+        if (componentItem.isNotEmpty) {
+          final currentQty = componentItem['qtyOnHand']?.toDouble() ?? 0.0;
+          if (currentQty < totalComponentQty) {
+            // Calculate wastage (negative quantity)
+            final wastageQty = totalComponentQty - currentQty;
+            wastage[componentName] = wastageQty;
+          }
+        }
+      }
+    }
+
+    return wastage;
   }
 
   Future<void> fetchItems() async {
@@ -246,7 +320,7 @@ class _ItemPurchasePageState extends State<ItemPurchasePage> {
     });
   }
 
-  void savePurchase() async {
+  Future<void> savePurchase() async {
     if (!mounted) return;
 
     final languageProvider = Provider.of<LanguageProvider>(context, listen: false);
@@ -282,12 +356,46 @@ class _ItemPurchasePageState extends State<ItemPurchasePage> {
       try {
         final database = FirebaseDatabase.instance.ref();
         String vendorKey = _selectedVendor!['key'];
+        _wastageRecords.clear();
 
-        // Process each valid item
+        // Create a single purchase record with all valid items
+        final newPurchase = {
+          'items': validItems.map((item) => {
+            'itemName': item.itemNameController.text,
+            'quantity': double.tryParse(item.quantityController.text) ?? 0.0,
+            'purchasePrice': double.tryParse(item.priceController.text) ?? 0.0,
+            'total': (double.tryParse(item.quantityController.text) ?? 0.0) *
+                (double.tryParse(item.priceController.text) ?? 0.0),
+          }).toList(),
+          'vendorId': vendorKey,
+          'vendorName': _selectedVendor!['name'],
+          'grandTotal': calculateTotal(),
+          'timestamp': _selectedDateTime.toString(),
+          'type': 'credit',
+          'hasBOM': validItems.any((item) =>
+              _items.any((i) =>
+              i['itemName'].toLowerCase() == item.itemNameController.text.toLowerCase() &&
+                  i['isBOM'] == true
+              )
+          ),
+        };
+
+        // Save the purchase and get the key
+        final purchaseRef = database.child('purchases').push();
+        final purchaseId = purchaseRef.key;
+        await purchaseRef.set(newPurchase);
+
+        // Process each valid item after purchase is saved
         for (var purchaseItem in validItems) {
           String itemName = purchaseItem.itemNameController.text;
           double purchasedQty = double.tryParse(purchaseItem.quantityController.text) ?? 0.0;
           double purchasePrice = double.tryParse(purchaseItem.priceController.text) ?? 0.0;
+
+          // Check if this is a BOM item and calculate wastage
+          final wastage = await checkBomComponentsForWastage(itemName, purchasedQty);
+          if (wastage.isNotEmpty) {
+            _wastageRecords.addAll(wastage);
+          }
 
           // Check if this is an existing item
           var existingItem = _items.firstWhere(
@@ -307,23 +415,58 @@ class _ItemPurchasePageState extends State<ItemPurchasePage> {
           }
         }
 
-        // Create a single purchase record with all valid items
-        final newPurchase = {
-          'items': validItems.map((item) => {
-            'itemName': item.itemNameController.text,
-            'quantity': double.tryParse(item.quantityController.text) ?? 0.0,
-            'purchasePrice': double.tryParse(item.priceController.text) ?? 0.0,
-            'total': (double.tryParse(item.quantityController.text) ?? 0.0) *
-                (double.tryParse(item.priceController.text) ?? 0.0),
-          }).toList(),
-          'vendorId': vendorKey,
-          'vendorName': _selectedVendor!['name'],
-          'grandTotal': calculateTotal(),
-          'timestamp': _selectedDateTime.toString(),
-          'type': 'credit',
-        };
+        // Record any wastage found
+        if (_wastageRecords.isNotEmpty && purchaseId != null) {
+          for (var entry in _wastageRecords.entries) {
+            try {
+              // Save wastage record
+              await database.child('wastage').push().set({
+                'itemName': entry.key,
+                'quantity': entry.value,
+                'date': DateTime.now().toString(),
+                'purchaseId': purchaseId,
+                'type': 'production',
+              });
 
-        await database.child('purchases').push().set(newPurchase);
+              // Update component inventory
+              var componentItem = _items.firstWhere(
+                    (item) => item['itemName'].toLowerCase() == entry.key.toLowerCase(),
+                orElse: () => {},
+              );
+
+              if (componentItem.isNotEmpty) {
+                String componentKey = componentItem['key'];
+                double currentQty = componentItem['qtyOnHand']?.toDouble() ?? 0.0;
+                await database.child('items').child(componentKey).update({
+                  'qtyOnHand': currentQty - entry.value,
+                });
+              }
+            } catch (e) {
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      languageProvider.isEnglish
+                          ? 'Error saving wastage for ${entry.key}: $e'
+                          : '${entry.key} کے لیے ضائع شدہ مقدار محفوظ کرنے میں خرابی: $e',
+                    ),
+                  ),
+                );
+              }
+            }
+          }
+
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                    languageProvider.isEnglish
+                        ? 'Wastage recorded for components: ${_wastageRecords.keys.join(', ')}'
+                        : 'اجزاء کے لیے ضائع شدہ مقدار درج کی گئی: ${_wastageRecords.keys.join(', ')}'),
+              ),
+            );
+          }
+        }
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
