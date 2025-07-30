@@ -916,8 +916,22 @@ class _ItemPurchasePageState extends State<ItemPurchasePage> {
               'costPrice': purchasePrice,
             });
 
+            // Handle BOM components more safely
             if (existingItem['isBOM'] == true) {
-              Map<String, dynamic> components = existingItem['components'] ?? {};
+              dynamic componentsData = existingItem['components'];
+              Map<String, dynamic> components = {};
+
+              // Safely convert components data to a map
+              if (componentsData is Map) {
+                components = componentsData.cast<String, dynamic>();
+              } else if (componentsData is List) {
+                // Handle list format if needed
+                for (int i = 0; i < componentsData.length; i += 2) {
+                  if (i + 1 < componentsData.length) {
+                    components[componentsData[i].toString()] = componentsData[i + 1];
+                  }
+                }
+              }
 
               Map<String, dynamic> consumptionRecord = {
                 'bomItemName': itemName,
@@ -929,7 +943,15 @@ class _ItemPurchasePageState extends State<ItemPurchasePage> {
 
               for (var componentEntry in components.entries) {
                 String componentName = componentEntry.key;
-                double qtyPerUnit = (componentEntry.value as num).toDouble();
+                double qtyPerUnit = 0.0;
+
+                // Safely parse the quantity per unit
+                if (componentEntry.value is num) {
+                  qtyPerUnit = (componentEntry.value as num).toDouble();
+                } else if (componentEntry.value is String) {
+                  qtyPerUnit = double.tryParse(componentEntry.value as String) ?? 0.0;
+                }
+
                 double totalQtyRequired = qtyPerUnit * purchasedQty;
 
                 var componentItem = _items.firstWhere(
@@ -949,8 +971,18 @@ class _ItemPurchasePageState extends State<ItemPurchasePage> {
                       'unit': componentItem['unit'] ?? '',
                     };
                   }
+
+                  consumptionRecord['components'][componentName] = {
+                    'required': totalQtyRequired,
+                    'used': currentQty >= totalQtyRequired ? totalQtyRequired : currentQty,
+                    'remaining': currentQty >= totalQtyRequired
+                        ? currentQty - totalQtyRequired
+                        : 0.0,
+                  };
                 }
               }
+
+              await componentConsumptionRef.set(consumptionRecord);
             }
           }
         }
@@ -1006,18 +1038,29 @@ class _ItemPurchasePageState extends State<ItemPurchasePage> {
           );
 
           if (existingItem.isNotEmpty && existingItem['isBOM'] == true) {
-            Map<String, dynamic> components = existingItem['components'] ?? {};
-            Map<String, dynamic> consumptionRecord = {
-              'bomItemName': itemName,
-              'bomItemKey': existingItem['key'],
-              'quantityProduced': purchasedQty,
-              'timestamp': _selectedDateTime.toString(),
-              'components': {},
-            };
+            dynamic componentsData = existingItem['components'];
+            Map<String, dynamic> components = {};
+
+            if (componentsData is Map) {
+              components = componentsData.cast<String, dynamic>();
+            } else if (componentsData is List) {
+              for (int i = 0; i < componentsData.length; i += 2) {
+                if (i + 1 < componentsData.length) {
+                  components[componentsData[i].toString()] = componentsData[i + 1];
+                }
+              }
+            }
 
             for (var componentEntry in components.entries) {
               String componentName = componentEntry.key;
-              double qtyPerUnit = (componentEntry.value as num).toDouble();
+              double qtyPerUnit = 0.0;
+
+              if (componentEntry.value is num) {
+                qtyPerUnit = (componentEntry.value as num).toDouble();
+              } else if (componentEntry.value is String) {
+                qtyPerUnit = double.tryParse(componentEntry.value as String) ?? 0.0;
+              }
+
               double totalQtyRequired = qtyPerUnit * purchasedQty;
 
               var componentItem = _items.firstWhere(
@@ -1034,11 +1077,6 @@ class _ItemPurchasePageState extends State<ItemPurchasePage> {
                   'qtyOnHand': currentQty - qtyToDeduct,
                 });
 
-                consumptionRecord['components'][componentName] = {
-                  'quantityUsed': qtyToDeduct,
-                  'remaining': currentQty - qtyToDeduct,
-                };
-
                 if (qtyToDeduct < totalQtyRequired) {
                   await database.child('wastage').push().set({
                     'itemName': componentName,
@@ -1048,14 +1086,9 @@ class _ItemPurchasePageState extends State<ItemPurchasePage> {
                     'type': 'component_shortage',
                     'relatedBOM': itemName,
                   });
-
-                  consumptionRecord['components'][componentName]['shortage'] =
-                      totalQtyRequired - qtyToDeduct;
                 }
               }
             }
-
-            await componentConsumptionRef.set(consumptionRecord);
           }
         }
 

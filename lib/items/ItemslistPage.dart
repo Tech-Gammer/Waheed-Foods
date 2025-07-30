@@ -350,63 +350,6 @@ class _ItemsListPageState extends State<ItemsListPage> {
     });
   }
 
-  // Future<List<Map<String, dynamic>>> _fetchItemTransactions(String itemKey) async {
-  //   final database = FirebaseDatabase.instance.ref();
-  //   List<Map<String, dynamic>> transactions = [];
-  //
-  //   try {
-  //     // Fetch purchases containing this item
-  //     final purchaseSnapshot = await database.child('purchases').get();
-  //     if (purchaseSnapshot.exists) {
-  //       final purchases = purchaseSnapshot.value as Map<dynamic, dynamic>;
-  //       purchases.forEach((purchaseKey, purchaseData) {
-  //         if (purchaseData['items'] != null) {
-  //           final items = purchaseData['items'] as List;
-  //           for (var item in items) {
-  //             if (item['itemName'] == _selectedItem!['itemName']) {
-  //               transactions.add({
-  //                 'type': 'Purchase',
-  //                 'date': purchaseData['timestamp'],
-  //                 'quantity': item['quantity'],
-  //                 'price': item['purchasePrice'],
-  //                 'total': (item['quantity'] as num).toDouble() * (item['purchasePrice'] as num).toDouble(),
-  //               });
-  //             }
-  //           }
-  //         }
-  //       });
-  //     }
-  //
-  //     // Fetch sales containing this item
-  //     final saleSnapshot = await database.child('sales').get();
-  //     if (saleSnapshot.exists) {
-  //       final sales = saleSnapshot.value as Map<dynamic, dynamic>;
-  //       sales.forEach((saleKey, saleData) {
-  //         if (saleData['items'] != null) {
-  //           final items = saleData['items'] as List;
-  //           for (var item in items) {
-  //             if (item['itemName'] == _selectedItem!['itemName']) {
-  //               transactions.add({
-  //                 'type': 'Sale',
-  //                 'date': saleData['timestamp'],
-  //                 'quantity': item['quantity'],
-  //                 'price': item['salePrice'],
-  //                 'total': (item['quantity'] as num).toDouble() * (item['salePrice'] as num).toDouble(),
-  //               });
-  //             }
-  //           }
-  //         }
-  //       });
-  //     }
-  //
-  //     // Sort by date (newest first)
-  //     transactions.sort((a, b) => b['date'].compareTo(a['date']));
-  //   } catch (e) {
-  //     print('Error fetching transactions: $e');
-  //   }
-  //
-  //   return transactions;
-  // }
 
   Future<List<Map<String, dynamic>>> _fetchItemTransactions(String itemKey) async {
     final database = FirebaseDatabase.instance.ref();
@@ -1062,42 +1005,6 @@ class _ItemsListPageState extends State<ItemsListPage> {
     );
   }
 
-  void _showAllTransactions(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => Container(
-        height: MediaQuery.of(context).size.height * 0.8,
-        padding: EdgeInsets.all(16),
-        child: Column(
-          children: [
-            Text(
-              "All Transactions for ${_selectedItem?['itemName']}",
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            SizedBox(height: 10),
-            Expanded(
-              child: ListView.builder(
-                itemCount: _itemTransactions.length,
-                itemBuilder: (context, index) {
-                  final txn = _itemTransactions[index];
-                  return Card(
-                    child: ListTile(
-                      title: Text(txn['type']),
-                      subtitle: Text(
-                        '${txn['quantity']} units on ${DateFormat.yMMMd().format(DateTime.parse(txn['date']))}',
-                      ),
-                      trailing: Text('${txn['total'].toStringAsFixed(2)} PKR'),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
   double _calculateEffectiveCost(Map<String, dynamic> item) {
     if (item['isBOM'] == true && item['components'] != null) {
@@ -1262,15 +1169,7 @@ class _ItemsListPageState extends State<ItemsListPage> {
   Widget _buildStatCard(String title, String value) {
     // Calculate profit margin if this is the profit margin card
     if (title == "Profit Margin" && _selectedItem != null) {
-      // final costPrice = double.tryParse(_selectedItem!['costPrice']?.toString() ?? '0') ?? 0;
-      // final salePrice = double.tryParse(_selectedItem!['salePrice']?.toString() ?? '0') ?? 0;
-      //
-      // double margin = 0;
-      // if (costPrice > 0) {
-      //   margin = ((salePrice - costPrice) / costPrice) * 100;
-      // }
-      //
-      // value = '${margin.toStringAsFixed(1)}%';
+
       final effectiveCost = _calculateEffectiveCost(_selectedItem!);
       final salePrice = double.tryParse(_selectedItem!['salePrice']?.toString() ?? '0') ?? 0;
 

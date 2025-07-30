@@ -4,6 +4,7 @@ import 'package:firebase_database/firebase_database.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../Provider/lanprovider.dart';
+import 'BuildBOM.dart';
 import 'itemPurchasePage.dart';
 
 
@@ -94,88 +95,6 @@ class _PurchaseListPageState extends State<PurchaseListPage> {
     });
   }
 
-  // void editPurchase(Map<String, dynamic> purchase) async {
-  //   final languageProvider = Provider.of<LanguageProvider>(context, listen: false);
-  //
-  //   // For simplicity, let's edit the first item if items exist
-  //   if (purchase['items'] == null || (purchase['items'] as List).isEmpty) {
-  //     ScaffoldMessenger.of(context).showSnackBar(
-  //       SnackBar(content: Text(languageProvider.isEnglish
-  //           ? 'No items to edit in this purchase'
-  //           : 'اس خریداری میں ترمیم کرنے کے لیے کوئی آئٹمز نہیں ہیں')),
-  //     );
-  //     return;
-  //   }
-  //
-  //   final firstItem = (purchase['items'] as List<Map<String, dynamic>>)[0];
-  //   final quantityController = TextEditingController(text: firstItem['quantity']?.toString() ?? '');
-  //   final priceController = TextEditingController(text: firstItem['purchasePrice']?.toString() ?? '');
-  //
-  //   final result = await showDialog<bool>(
-  //     context: context,
-  //     builder: (context) {
-  //       return AlertDialog(
-  //         title: Text(languageProvider.isEnglish ? 'Edit Purchase' : 'خریداری میں ترمیم کریں'),
-  //         content: Column(
-  //           mainAxisSize: MainAxisSize.min,
-  //           children: [
-  //             TextFormField(
-  //               controller: quantityController,
-  //               decoration: InputDecoration(
-  //                   labelText: languageProvider.isEnglish ? 'Quantity' : 'مقدار'
-  //               ),
-  //               keyboardType: TextInputType.number,
-  //             ),
-  //             TextFormField(
-  //               controller: priceController,
-  //               decoration: InputDecoration(
-  //                   labelText: languageProvider.isEnglish ? 'Price' : 'قیمت'
-  //               ),
-  //               keyboardType: TextInputType.number,
-  //             ),
-  //           ],
-  //         ),
-  //         actions: [
-  //           TextButton(
-  //             onPressed: () => Navigator.pop(context, false),
-  //             child: Text(languageProvider.isEnglish ? 'Cancel' : 'منسوخ کریں'),
-  //           ),
-  //           ElevatedButton(
-  //             onPressed: () async {
-  //               // Update the first item
-  //               final updatedItems = [...purchase['items']];
-  //               updatedItems[0] = {
-  //                 ...updatedItems[0],
-  //                 'quantity': double.tryParse(quantityController.text) ?? updatedItems[0]['quantity'],
-  //                 'purchasePrice': double.tryParse(priceController.text) ?? updatedItems[0]['purchasePrice'],
-  //               };
-  //
-  //               // Recalculate grand total
-  //               final newGrandTotal = updatedItems.fold(0.0, (sum, item) {
-  //                 return sum + ((item['quantity'] ?? 0) * (item['purchasePrice'] ?? 0));
-  //               });
-  //
-  //               await FirebaseDatabase.instance.ref('purchases/${purchase['key']}').update({
-  //                 'items': updatedItems,
-  //                 'grandTotal': newGrandTotal,
-  //               });
-  //               Navigator.pop(context, true);
-  //             },
-  //             child: Text(languageProvider.isEnglish ? 'Save' : 'محفوظ کریں'),
-  //           ),
-  //         ],
-  //       );
-  //     },
-  //   );
-  //
-  //   if (result == true) {
-  //     ScaffoldMessenger.of(context).showSnackBar(
-  //       SnackBar(content: Text(languageProvider.isEnglish
-  //           ? 'Purchase updated successfully'
-  //           : 'خریداری کامیابی سے اپ ڈیٹ ہو گئی')),
-  //     );
-  //   }
-  // }
 
   void deletePurchase(String key) async {
     final languageProvider = Provider.of<LanguageProvider>(context, listen: false);
@@ -246,6 +165,15 @@ class _PurchaseListPageState extends State<PurchaseListPage> {
           ),
         ),
         actions: [
+          IconButton(
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => BuildBomPage()),
+              );
+            },
+            icon: Icon(Icons.build, color: Colors.white),
+          ),
           IconButton(
             onPressed: () {
               Navigator.push(
