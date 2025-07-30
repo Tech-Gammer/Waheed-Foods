@@ -57,6 +57,7 @@ dependencies:
   photo_view: any
   universal_html: ^2.2.4
   page_transition: any
+  shared_preferences: any
 
 dev_dependencies:
   flutter_test:

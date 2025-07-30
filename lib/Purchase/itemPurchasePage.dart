@@ -97,6 +97,7 @@ class _ItemPurchasePageState extends State<ItemPurchasePage> {
     super.dispose();
   }
 
+
   Future<Map<String, dynamic>?> fetchBomForItem(String itemName) async {
     final item = _items.firstWhere(
           (item) => item['itemName'].toLowerCase() == itemName.toLowerCase(),
@@ -165,36 +166,6 @@ class _ItemPurchasePageState extends State<ItemPurchasePage> {
     }
 
     return wastage;
-  }
-
-  Future<void> fetchItems() async {
-    if (!mounted) return;
-    setState(() => _isLoadingItems = true);
-    final database = FirebaseDatabase.instance.ref();
-    try {
-      final snapshot = await database.child('items').get();
-      if (snapshot.exists && mounted) {
-        final Map<dynamic, dynamic> itemData = snapshot.value as Map<dynamic, dynamic>;
-        setState(() {
-          _items = itemData.entries.map((entry) => {
-            'key': entry.key,
-            'itemName': entry.value['itemName'] ?? '',
-            'costPrice': (entry.value['costPrice'] as num?)?.toDouble() ?? 0.0,
-            'qtyOnHand': (entry.value['qtyOnHand'] as num?)?.toDouble() ?? 0.0,
-          }).toList();
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error fetching items: $e')),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isLoadingItems = false);
-      }
-    }
   }
 
   Future<void> fetchVendors() async {
@@ -320,177 +291,6 @@ class _ItemPurchasePageState extends State<ItemPurchasePage> {
     });
   }
 
-  Future<void> savePurchase() async {
-    if (!mounted) return;
-
-    final languageProvider = Provider.of<LanguageProvider>(context, listen: false);
-
-    if (_formKey.currentState!.validate()) {
-      if (_selectedVendor == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text(languageProvider.isEnglish
-                  ? 'Please select a vendor'
-                  : 'براہ کرم فروش منتخب کریں')),
-        );
-        return;
-      }
-
-      // Get only items that have been filled
-      List<PurchaseItem> validItems = _purchaseItems.where((item) =>
-      item.itemNameController.text.isNotEmpty &&
-          item.quantityController.text.isNotEmpty &&
-          item.priceController.text.isNotEmpty
-      ).toList();
-
-      if (validItems.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text(languageProvider.isEnglish
-                  ? 'Please add at least one item'
-                  : 'براہ کرم کم از کم ایک آئٹم شامل کریں')),
-        );
-        return;
-      }
-
-      try {
-        final database = FirebaseDatabase.instance.ref();
-        String vendorKey = _selectedVendor!['key'];
-        _wastageRecords.clear();
-
-        // Create a single purchase record with all valid items
-        final newPurchase = {
-          'items': validItems.map((item) => {
-            'itemName': item.itemNameController.text,
-            'quantity': double.tryParse(item.quantityController.text) ?? 0.0,
-            'purchasePrice': double.tryParse(item.priceController.text) ?? 0.0,
-            'total': (double.tryParse(item.quantityController.text) ?? 0.0) *
-                (double.tryParse(item.priceController.text) ?? 0.0),
-          }).toList(),
-          'vendorId': vendorKey,
-          'vendorName': _selectedVendor!['name'],
-          'grandTotal': calculateTotal(),
-          'timestamp': _selectedDateTime.toString(),
-          'type': 'credit',
-          'hasBOM': validItems.any((item) =>
-              _items.any((i) =>
-              i['itemName'].toLowerCase() == item.itemNameController.text.toLowerCase() &&
-                  i['isBOM'] == true
-              )
-          ),
-        };
-
-        // Save the purchase and get the key
-        final purchaseRef = database.child('purchases').push();
-        final purchaseId = purchaseRef.key;
-        await purchaseRef.set(newPurchase);
-
-        // Process each valid item after purchase is saved
-        for (var purchaseItem in validItems) {
-          String itemName = purchaseItem.itemNameController.text;
-          double purchasedQty = double.tryParse(purchaseItem.quantityController.text) ?? 0.0;
-          double purchasePrice = double.tryParse(purchaseItem.priceController.text) ?? 0.0;
-
-          // Check if this is a BOM item and calculate wastage
-          final wastage = await checkBomComponentsForWastage(itemName, purchasedQty);
-          if (wastage.isNotEmpty) {
-            _wastageRecords.addAll(wastage);
-          }
-
-          // Check if this is an existing item
-          var existingItem = _items.firstWhere(
-                (item) => item['itemName'].toLowerCase() == itemName.toLowerCase(),
-            orElse: () => {},
-          );
-
-          if (existingItem.isNotEmpty) {
-            // Existing item - update quantity and price
-            String itemKey = existingItem['key'];
-            double currentQty = existingItem['qtyOnHand']?.toDouble() ?? 0.0;
-
-            await database.child('items').child(itemKey).update({
-              'qtyOnHand': currentQty + purchasedQty,
-              'costPrice': purchasePrice,
-            });
-          }
-        }
-
-        // Record any wastage found
-        if (_wastageRecords.isNotEmpty && purchaseId != null) {
-          for (var entry in _wastageRecords.entries) {
-            try {
-              // Save wastage record
-              await database.child('wastage').push().set({
-                'itemName': entry.key,
-                'quantity': entry.value,
-                'date': DateTime.now().toString(),
-                'purchaseId': purchaseId,
-                'type': 'production',
-              });
-
-              // Update component inventory
-              var componentItem = _items.firstWhere(
-                    (item) => item['itemName'].toLowerCase() == entry.key.toLowerCase(),
-                orElse: () => {},
-              );
-
-              if (componentItem.isNotEmpty) {
-                String componentKey = componentItem['key'];
-                double currentQty = componentItem['qtyOnHand']?.toDouble() ?? 0.0;
-                await database.child('items').child(componentKey).update({
-                  'qtyOnHand': currentQty - entry.value,
-                });
-              }
-            } catch (e) {
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      languageProvider.isEnglish
-                          ? 'Error saving wastage for ${entry.key}: $e'
-                          : '${entry.key} کے لیے ضائع شدہ مقدار محفوظ کرنے میں خرابی: $e',
-                    ),
-                  ),
-                );
-              }
-            }
-          }
-
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                    languageProvider.isEnglish
-                        ? 'Wastage recorded for components: ${_wastageRecords.keys.join(', ')}'
-                        : 'اجزاء کے لیے ضائع شدہ مقدار درج کی گئی: ${_wastageRecords.keys.join(', ')}'),
-              ),
-            );
-          }
-        }
-
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-                content: Text(languageProvider.isEnglish
-                    ? 'Purchase recorded successfully!'
-                    : 'خریداری کامیابی سے ریکارڈ ہو گئی!')),
-          );
-
-          // Clear form after successful save
-          _clearForm();
-        }
-      } catch (error) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-                content: Text(languageProvider.isEnglish
-                    ? 'Failed to record purchase: $error'
-                    : 'خریداری ریکارڈ کرنے میں ناکامی: $error')),
-          );
-        }
-      }
-    }
-  }
 
   Widget tableHeader(String text) => Padding(
     padding: const EdgeInsets.all(8.0),
@@ -503,7 +303,6 @@ class _ItemPurchasePageState extends State<ItemPurchasePage> {
     ),
   );
 
-  // Add the _generatePdf method here
   Future<Uint8List> _generatePdf(BuildContext context) async {
     final languageProvider = Provider.of<LanguageProvider>(context, listen: false);
     final total = calculateTotal();
@@ -991,6 +790,492 @@ class _ItemPurchasePageState extends State<ItemPurchasePage> {
       ),
     );
   }
+
+  Future<Map<String, Map<String, dynamic>>> getBomComponents(String itemName, double purchasedQty) async {
+    final database = FirebaseDatabase.instance.ref();
+    final snapshot = await database.child('items').orderByChild('itemName').equalTo(itemName).get();
+
+    if (snapshot.exists) {
+      final itemsData = snapshot.value as Map<dynamic, dynamic>;
+
+      for (final itemEntry in itemsData.entries) {
+        final item = itemEntry.value;
+        if (item['itemName'] == itemName && item['isBOM'] == true) {
+          final components = item['components'];
+
+          if (components is List) {
+            // Handle list format with component objects
+            final componentMap = <String, Map<String, dynamic>>{};
+            for (int i = 0; i < components.length; i++) {
+              final component = components[i];
+              if (component is Map && component['id'] != null) {
+                final componentName = component['name']?.toString() ?? '';
+                final componentId = component['id'].toString();
+                final componentQty = (component['quantity'] as num?)?.toDouble() ?? 0.0;
+
+                componentMap[componentId] = {
+                  'name': componentName,
+                  'quantity': componentQty * purchasedQty,
+                  'unit': component['unit']?.toString() ?? '',
+                };
+              }
+            }
+            return componentMap;
+          }
+        }
+      }
+    }
+
+    return {};
+  }
+
+
+  Future<void> savePurchase() async {
+    if (!mounted) return;
+
+    final languageProvider = Provider.of<LanguageProvider>(context, listen: false);
+
+    if (_formKey.currentState!.validate()) {
+      if (_selectedVendor == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(languageProvider.isEnglish
+              ? 'Please select a vendor'
+              : 'براہ کرم فروش منتخب کریں')),
+        );
+        return;
+      }
+
+      List<PurchaseItem> validItems = _purchaseItems.where((purchaseItem) =>
+      purchaseItem.itemNameController.text.isNotEmpty &&
+          purchaseItem.quantityController.text.isNotEmpty &&
+          purchaseItem.priceController.text.isNotEmpty).toList();
+
+      if (validItems.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(languageProvider.isEnglish
+              ? 'Please add at least one item'
+              : 'براہ کرم کم از کم ایک آئٹم شامل کریں')),
+        );
+        return;
+      }
+
+      try {
+        final database = FirebaseDatabase.instance.ref();
+        String vendorKey = _selectedVendor!['key'];
+        _wastageRecords.clear();
+
+        final newPurchase = {
+          'items': validItems.map((purchaseItem) => {
+            'itemName': purchaseItem.itemNameController.text,
+            'quantity': double.tryParse(purchaseItem.quantityController.text) ?? 0.0,
+            'purchasePrice': double.tryParse(purchaseItem.priceController.text) ?? 0.0,
+            'total': (double.tryParse(purchaseItem.quantityController.text) ?? 0.0) *
+                (double.tryParse(purchaseItem.priceController.text) ?? 0.0),
+            'isBOM': _items.any((item) =>
+            item['itemName'].toLowerCase() ==
+                purchaseItem.itemNameController.text.toLowerCase() &&
+                item['isBOM'] == true),
+          }).toList(),
+          'vendorId': vendorKey,
+          'vendorName': _selectedVendor!['name'],
+          'grandTotal': calculateTotal(),
+          'timestamp': _selectedDateTime.toString(),
+          'type': 'credit',
+          'hasBOM': validItems.any((purchaseItem) =>
+              _items.any((inventoryItem) =>
+              inventoryItem['itemName'].toLowerCase() ==
+                  purchaseItem.itemNameController.text.toLowerCase() &&
+                  inventoryItem['isBOM'] == true)),
+        };
+
+        final purchaseRef = database.child('purchases').push();
+        final purchaseId = purchaseRef.key;
+        await purchaseRef.set(newPurchase);
+
+        final componentConsumptionRef = database.child('componentConsumption').child(purchaseId!);
+
+        Map<String, Map<String, dynamic>> missingComponents = {};
+
+        for (var purchaseItem in validItems) {
+          String itemName = purchaseItem.itemNameController.text;
+          double purchasedQty = double.tryParse(purchaseItem.quantityController.text) ?? 0.0;
+
+          var existingItem = _items.firstWhere(
+                (inventoryItem) =>
+            inventoryItem['itemName'].toLowerCase() == itemName.toLowerCase(),
+            orElse: () => {},
+          );
+
+          if (existingItem.isNotEmpty) {
+            String itemKey = existingItem['key'];
+            double currentQty = existingItem['qtyOnHand']?.toDouble() ?? 0.0;
+            double purchasePrice = double.tryParse(purchaseItem.priceController.text) ?? 0.0;
+
+            await database.child('items').child(itemKey).update({
+              'qtyOnHand': currentQty + purchasedQty,
+              'costPrice': purchasePrice,
+            });
+
+            if (existingItem['isBOM'] == true) {
+              Map<String, dynamic> components = existingItem['components'] ?? {};
+
+              Map<String, dynamic> consumptionRecord = {
+                'bomItemName': itemName,
+                'bomItemKey': itemKey,
+                'quantityProduced': purchasedQty,
+                'timestamp': _selectedDateTime.toString(),
+                'components': {},
+              };
+
+              for (var componentEntry in components.entries) {
+                String componentName = componentEntry.key;
+                double qtyPerUnit = (componentEntry.value as num).toDouble();
+                double totalQtyRequired = qtyPerUnit * purchasedQty;
+
+                var componentItem = _items.firstWhere(
+                      (item) => item['itemName'].toLowerCase() == componentName.toLowerCase(),
+                  orElse: () => {},
+                );
+
+                if (componentItem.isNotEmpty) {
+                  String componentKey = componentItem['key'];
+                  double currentQty = componentItem['qtyOnHand']?.toDouble() ?? 0.0;
+
+                  if (currentQty < totalQtyRequired) {
+                    missingComponents[componentKey] = {
+                      'name': componentName,
+                      'requiredQty': totalQtyRequired,
+                      'availableQty': currentQty,
+                      'unit': componentItem['unit'] ?? '',
+                    };
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        if (missingComponents.isNotEmpty) {
+          bool proceed = await showDialog(
+            context: context,
+            builder: (context) {
+              return AlertDialog(
+                title: Text(languageProvider.isEnglish
+                    ? 'Insufficient Components'
+                    : 'اجزاء کی کمی'),
+                content: SizedBox(
+                  width: double.maxFinite,
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: missingComponents.values.map((comp) {
+                      return ListTile(
+                        title: Text('${comp['name']} (${comp['unit']})'),
+                        subtitle: Text(languageProvider.isEnglish
+                            ? 'Required: ${comp['requiredQty']}, Available: ${comp['availableQty']}'
+                            : 'درکار: ${comp['requiredQty']}, دستیاب: ${comp['availableQty']}'),
+                      );
+                    }).toList(),
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(false),
+                    child: Text(languageProvider.isEnglish ? 'Cancel' : 'منسوخ کریں'),
+                  ),
+                  ElevatedButton(
+                    onPressed: () => Navigator.of(context).pop(true),
+                    child: Text(languageProvider.isEnglish ? 'Proceed Anyway' : 'پھر بھی جاری رکھیں'),
+                  ),
+                ],
+              );
+            },
+          );
+
+          if (!proceed) return;
+        }
+
+        // Deduct components (partial or full) and record consumption/wastage
+        for (var purchaseItem in validItems) {
+          String itemName = purchaseItem.itemNameController.text;
+          double purchasedQty = double.tryParse(purchaseItem.quantityController.text) ?? 0.0;
+
+          var existingItem = _items.firstWhere(
+                (inventoryItem) =>
+            inventoryItem['itemName'].toLowerCase() == itemName.toLowerCase(),
+            orElse: () => {},
+          );
+
+          if (existingItem.isNotEmpty && existingItem['isBOM'] == true) {
+            Map<String, dynamic> components = existingItem['components'] ?? {};
+            Map<String, dynamic> consumptionRecord = {
+              'bomItemName': itemName,
+              'bomItemKey': existingItem['key'],
+              'quantityProduced': purchasedQty,
+              'timestamp': _selectedDateTime.toString(),
+              'components': {},
+            };
+
+            for (var componentEntry in components.entries) {
+              String componentName = componentEntry.key;
+              double qtyPerUnit = (componentEntry.value as num).toDouble();
+              double totalQtyRequired = qtyPerUnit * purchasedQty;
+
+              var componentItem = _items.firstWhere(
+                    (item) => item['itemName'].toLowerCase() == componentName.toLowerCase(),
+                orElse: () => {},
+              );
+
+              if (componentItem.isNotEmpty) {
+                String componentKey = componentItem['key'];
+                double currentQty = componentItem['qtyOnHand']?.toDouble() ?? 0.0;
+                double qtyToDeduct = currentQty < totalQtyRequired ? currentQty : totalQtyRequired;
+
+                await database.child('items').child(componentKey).update({
+                  'qtyOnHand': currentQty - qtyToDeduct,
+                });
+
+                consumptionRecord['components'][componentName] = {
+                  'quantityUsed': qtyToDeduct,
+                  'remaining': currentQty - qtyToDeduct,
+                };
+
+                if (qtyToDeduct < totalQtyRequired) {
+                  await database.child('wastage').push().set({
+                    'itemName': componentName,
+                    'quantity': totalQtyRequired - qtyToDeduct,
+                    'date': DateTime.now().toString(),
+                    'purchaseId': purchaseId,
+                    'type': 'component_shortage',
+                    'relatedBOM': itemName,
+                  });
+
+                  consumptionRecord['components'][componentName]['shortage'] =
+                      totalQtyRequired - qtyToDeduct;
+                }
+              }
+            }
+
+            await componentConsumptionRef.set(consumptionRecord);
+          }
+        }
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(languageProvider.isEnglish
+                ? 'Purchase recorded successfully!'
+                : 'خریداری کامیابی سے ریکارڈ ہو گئی!')),
+          );
+          _clearForm();
+        }
+      } catch (error) {
+        print('Purchase error: $error');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(languageProvider.isEnglish
+                ? 'Failed to record purchase: ${error.toString()}'
+                : 'خریداری ریکارڈ کرنے میں ناکامی: ${error.toString()}')),
+          );
+        }
+      }
+    }
+  }
+
+
+  Future<List<Map<String, dynamic>>> getComponentConsumptionHistory(String bomItemKey) async {
+    final database = FirebaseDatabase.instance.ref();
+    final snapshot = await database.child('componentConsumption')
+        .orderByChild('bomItemKey')
+        .equalTo(bomItemKey)
+        .get();
+
+    if (snapshot.exists) {
+      Map<dynamic, dynamic> consumptionData = snapshot.value as Map<dynamic, dynamic>;
+      return consumptionData.entries.map((entry) {
+        // Convert the dynamic keys to String keys
+        Map<String, dynamic> entryValue = {};
+        if (entry.value is Map) {
+          entryValue = (entry.value as Map).cast<String, dynamic>();
+        }
+
+        return {
+          'key': entry.key.toString(), // Ensure key is String
+          ...entryValue,
+        };
+      }).toList();
+    }
+    return [];
+  }
+
+  Future<void> fetchItems() async {
+    if (!mounted) return;
+    setState(() => _isLoadingItems = true);
+    final database = FirebaseDatabase.instance.ref();
+    try {
+      final snapshot = await database.child('items').get();
+      if (snapshot.exists && mounted) {
+        dynamic itemData = snapshot.value;
+        Map<dynamic, dynamic> itemsMap = {};
+
+        // Handle both Map and List cases for items
+        if (itemData is Map) {
+          itemsMap = itemData;
+        } else if (itemData is List) {
+          // Convert list to map with index keys if we get a list
+          itemsMap = {for (var i = 0; i < itemData.length; i++) i.toString(): itemData[i]};
+        }
+
+        setState(() {
+          _items = itemsMap.entries.map((entry) {
+            // Safely handle components data
+            dynamic componentsData = entry.value['components'];
+            Map<String, dynamic> componentsMap = {};
+
+            if (componentsData != null) {
+              if (componentsData is Map) {
+                componentsMap = componentsData.cast<String, dynamic>();
+              } else if (componentsData is List) {
+                // Convert list to map if components is stored as a list
+                // This assumes the list alternates between component name and quantity
+                for (int i = 0; i < componentsData.length; i += 2) {
+                  if (i + 1 < componentsData.length) {
+                    componentsMap[componentsData[i].toString()] = componentsData[i + 1];
+                  }
+                }
+              }
+            }
+
+            return {
+              'key': entry.key,
+              'itemName': entry.value['itemName']?.toString() ?? '',
+              'costPrice': (entry.value['costPrice'] as num?)?.toDouble() ?? 0.0,
+              'qtyOnHand': (entry.value['qtyOnHand'] as num?)?.toDouble() ?? 0.0,
+              'isBOM': entry.value['isBOM'] == true,
+              'components': componentsMap,
+            };
+          }).toList();
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error fetching items: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingItems = false);
+      }
+    }
+  }
+
+  void showComponentConsumption(String bomItemName, String bomItemKey) async {
+    final languageProvider = Provider.of<LanguageProvider>(context, listen: false);
+    final consumptionHistory = await getComponentConsumptionHistory(bomItemKey);
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('${languageProvider.isEnglish ? 'Component Consumption for' : 'اجزاء کی کھپت برائے'} $bomItemName'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: consumptionHistory.isEmpty
+              ? Text(languageProvider.isEnglish
+              ? 'No consumption history found'
+              : 'کوئی کھپت کی تاریخ دستیاب نہیں')
+              : ListView.builder(
+            shrinkWrap: true,
+            itemCount: consumptionHistory.length,
+            itemBuilder: (context, index) {
+              final record = consumptionHistory[index];
+              return ExpansionTile(
+                title: Text(DateFormat('yyyy-MM-dd HH:mm').format(DateTime.parse(record['timestamp']))),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('${languageProvider.isEnglish ? 'Quantity Produced' : 'تعداد پیدا ہوئی'}: ${record['quantityProduced']}'),
+                        SizedBox(height: 10),
+                        Text('${languageProvider.isEnglish ? 'Components Used' : 'استعمال شدہ اجزاء'}:'),
+                        ...(record['components'] as Map).entries.map((component) {
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                            child: Text('- ${component.key}: ${component.value['quantityUsed']}'),
+                          );
+                        }).toList(),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(languageProvider.isEnglish ? 'Close' : 'بند کریں'),
+          ),
+        ],
+      ),
+    );
+  }
+
+
+  Future<Map<String, dynamic>> checkBomFeasibility(String bomItemName, double quantity) async {
+    final bomItem = _items.firstWhere(
+          (item) => item['itemName'].toLowerCase() == bomItemName.toLowerCase(),
+      orElse: () => {},
+    );
+
+    if (bomItem.isEmpty || bomItem['isBOM'] != true) {
+      return {'feasible': true, 'missingComponents': {}};
+    }
+
+    Map<String, dynamic> components = bomItem['components'] ?? {};
+    Map<String, dynamic> result = {
+      'feasible': true,
+      'missingComponents': {},
+      'totalRequired': {},
+    };
+
+    for (var componentEntry in components.entries) {
+      String componentName = componentEntry.key;
+      double componentQtyPerUnit = (componentEntry.value as num).toDouble();
+      double totalComponentQty = componentQtyPerUnit * quantity;
+
+      var componentItem = _items.firstWhere(
+            (item) => item['itemName'].toLowerCase() == componentName.toLowerCase(),
+        orElse: () => {},
+      );
+
+      if (componentItem.isEmpty) {
+        result['feasible'] = false;
+        result['missingComponents'][componentName] = {
+          'required': totalComponentQty,
+          'available': 0.0,
+          'shortage': totalComponentQty,
+        };
+      } else {
+        double availableQty = componentItem['qtyOnHand']?.toDouble() ?? 0.0;
+        result['totalRequired'][componentName] = totalComponentQty;
+
+        if (availableQty < totalComponentQty) {
+          result['feasible'] = false;
+          result['missingComponents'][componentName] = {
+            'required': totalComponentQty,
+            'available': availableQty,
+            'shortage': totalComponentQty - availableQty,
+          };
+        }
+      }
+    }
+
+    return result;
+  }
+
+
 }
 
 class PurchaseItem {

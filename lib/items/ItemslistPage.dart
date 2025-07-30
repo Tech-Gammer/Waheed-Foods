@@ -1,20 +1,24 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+import 'package:waheed_foods/items/stockreportpage.dart';
 import 'dart:ui' as ui;
 import '../Provider/lanprovider.dart';
 import '../Purchase/wastage recordpage.dart';
 import 'AddItems.dart';
+import 'editphysicalqty.dart';
 
 class ItemsListPage extends StatefulWidget {
   @override
@@ -27,7 +31,8 @@ class _ItemsListPageState extends State<ItemsListPage> {
   List<Map<String, dynamic>> _filteredItems = [];
   final TextEditingController _searchController = TextEditingController();
   Map<String, dynamic>? _selectedItem;
-
+  List<Map<String, dynamic>> _itemTransactions = [];
+  bool _isLoadingTransactions = false;
   String? _savedPdfPath;
   Uint8List? _pdfBytes;
   Map<String, String> customerIdNameMap = {};
@@ -253,30 +258,6 @@ class _ItemsListPageState extends State<ItemsListPage> {
     }
   }
 
-  // void updateItem(Map<String, dynamic> item) {
-  //   Navigator.push(
-  //     context,
-  //     MaterialPageRoute(
-  //       builder: (context) => RegisterItemPage(
-  //         itemData: {
-  //           'key': item['key'],
-  //           'itemName': item['itemName'],
-  //           'image': item['image'],
-  //           'unit': item['unit'] ?? '', // Handle null for BOM
-  //           'costPrice': item['costPrice'] ?? 0.0, // Handle null for BOM
-  //           'salePrice': item['salePrice'] ?? 0.0,
-  //           'qtyOnHand': item['qtyOnHand'] ?? 0,
-  //           'vendor': item['vendor'] ?? '', // Handle null for BOM
-  //           'category': item['category'] ?? '', // Handle null for BOM
-  //           'weightPerBag': item['weightPerBag'] ?? 1.0,
-  //           'customerBasePrices': item['customerBasePrices'], // May be null for BOM
-  //           'isBOM': item['isBOM'] ?? false, // Add this field
-  //           'components': item['components'], // For BOM items
-  //         },
-  //       ),
-  //     ),
-  //   );
-  // }
 
   void updateItem(Map<String, dynamic> item) {
     // Safely convert components to List<Map<String, dynamic>>
@@ -369,6 +350,103 @@ class _ItemsListPageState extends State<ItemsListPage> {
     });
   }
 
+  // Future<List<Map<String, dynamic>>> _fetchItemTransactions(String itemKey) async {
+  //   final database = FirebaseDatabase.instance.ref();
+  //   List<Map<String, dynamic>> transactions = [];
+  //
+  //   try {
+  //     // Fetch purchases containing this item
+  //     final purchaseSnapshot = await database.child('purchases').get();
+  //     if (purchaseSnapshot.exists) {
+  //       final purchases = purchaseSnapshot.value as Map<dynamic, dynamic>;
+  //       purchases.forEach((purchaseKey, purchaseData) {
+  //         if (purchaseData['items'] != null) {
+  //           final items = purchaseData['items'] as List;
+  //           for (var item in items) {
+  //             if (item['itemName'] == _selectedItem!['itemName']) {
+  //               transactions.add({
+  //                 'type': 'Purchase',
+  //                 'date': purchaseData['timestamp'],
+  //                 'quantity': item['quantity'],
+  //                 'price': item['purchasePrice'],
+  //                 'total': (item['quantity'] as num).toDouble() * (item['purchasePrice'] as num).toDouble(),
+  //               });
+  //             }
+  //           }
+  //         }
+  //       });
+  //     }
+  //
+  //     // Fetch sales containing this item
+  //     final saleSnapshot = await database.child('sales').get();
+  //     if (saleSnapshot.exists) {
+  //       final sales = saleSnapshot.value as Map<dynamic, dynamic>;
+  //       sales.forEach((saleKey, saleData) {
+  //         if (saleData['items'] != null) {
+  //           final items = saleData['items'] as List;
+  //           for (var item in items) {
+  //             if (item['itemName'] == _selectedItem!['itemName']) {
+  //               transactions.add({
+  //                 'type': 'Sale',
+  //                 'date': saleData['timestamp'],
+  //                 'quantity': item['quantity'],
+  //                 'price': item['salePrice'],
+  //                 'total': (item['quantity'] as num).toDouble() * (item['salePrice'] as num).toDouble(),
+  //               });
+  //             }
+  //           }
+  //         }
+  //       });
+  //     }
+  //
+  //     // Sort by date (newest first)
+  //     transactions.sort((a, b) => b['date'].compareTo(a['date']));
+  //   } catch (e) {
+  //     print('Error fetching transactions: $e');
+  //   }
+  //
+  //   return transactions;
+  // }
+
+  Future<List<Map<String, dynamic>>> _fetchItemTransactions(String itemKey) async {
+    final database = FirebaseDatabase.instance.ref();
+    List<Map<String, dynamic>> transactions = [];
+
+    try {
+      // Fetch purchases containing this item
+      final purchaseSnapshot = await database.child('purchases').get();
+      if (purchaseSnapshot.exists) {
+        final purchases = purchaseSnapshot.value as Map<dynamic, dynamic>;
+        purchases.forEach((purchaseKey, purchaseData) {
+          if (purchaseData['items'] != null) {
+            final items = purchaseData['items'] as List;
+            for (var item in items) {
+              if (item['itemName'] == _selectedItem!['itemName']) {
+                transactions.add({
+                  'type': 'Purchase',
+                  'purchaseId': purchaseKey,
+                  'date': purchaseData['timestamp'],
+                  'quantity': item['quantity'],
+                  'price': item['purchasePrice'],
+                  'vendor': purchaseData['vendorName'] ?? 'Unknown Vendor',
+                  'total': (item['quantity'] as num).toDouble() *
+                      (item['purchasePrice'] as num).toDouble(),
+                });
+              }
+            }
+          }
+        });
+      }
+
+      // Sort by date (newest first)
+      transactions.sort((a, b) => b['date'].compareTo(a['date']));
+    } catch (e) {
+      print('Error fetching transactions: $e');
+    }
+
+    return transactions;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -377,6 +455,15 @@ class _ItemsListPageState extends State<ItemsListPage> {
         actions: [
           IconButton(icon: Icon(Icons.picture_as_pdf), onPressed: _createPDFAndSave),
           IconButton(icon: Icon(Icons.share), onPressed: _sharePDF),
+          IconButton(
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => StockReportPage()),
+              );
+            },
+            icon: Icon(Icons.history, color: Colors.white),
+          ),
         ],
         flexibleSpace: Container(
           decoration: BoxDecoration(
@@ -444,8 +531,13 @@ class _ItemsListPageState extends State<ItemsListPage> {
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   IconButton(
-                                    icon: Icon(Icons.edit, color: _primaryColor),
-                                    onPressed: () => updateItem(item),
+                                    icon: Icon(Icons.edit_note, color: Colors.blue),
+                                    onPressed: () => Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (context) => EditQtyPage(itemData: item),
+                                      ),
+                                    ),
                                   ),
                                   IconButton(
                                     icon: Icon(Icons.delete, color: Colors.red),
@@ -453,9 +545,21 @@ class _ItemsListPageState extends State<ItemsListPage> {
                                   ),
                                 ],
                               ),
-                              onTap: () {
+                              // onTap: () {
+                              //   setState(() {
+                              //     _selectedItem = item;
+                              //   });
+                              // },
+                              onTap: () async {
                                 setState(() {
                                   _selectedItem = item;
+                                  _isLoadingTransactions = true;
+                                });
+
+                                final transactions = await _fetchItemTransactions(item['key']);
+                                setState(() {
+                                  _itemTransactions = transactions.where((t) => t['type'] == 'Purchase').toList();
+                                  _isLoadingTransactions = false;
                                 });
                               },
                             ),
@@ -532,8 +636,8 @@ class _ItemsListPageState extends State<ItemsListPage> {
                                 _buildDetailRow("Item Name",
                                     _selectedItem!['itemName']?.toString() ?? 'N/A'),
                                 if (_selectedItem!['isBOM'] != true) ...[
-                                  _buildDetailRow("Cost Price",
-                                      _selectedItem!['costPrice']?.toString() ?? 'N/A'),
+                                  // _buildDetailRow("Cost Price",
+                                  //     _selectedItem!['costPrice']?.toString() ?? 'N/A'),
                                   _buildDetailRow("Unit",
                                       _selectedItem!['unit']?.toString() ?? 'N/A'),
                                   _buildDetailRow("Vendor",
@@ -541,10 +645,80 @@ class _ItemsListPageState extends State<ItemsListPage> {
                                 ],
                                 _buildDetailRow("Sale Price",
                                     _selectedItem!['salePrice']?.toString() ?? 'N/A'),
+                                // In your item details section, add this row:
+                                _buildDetailRow(
+                                    "Cost Price",
+                                    _selectedItem!['isBOM'] == true
+                                        ? "Components Based"
+                                        : _selectedItem!['costPrice']?.toString() ?? 'N/A'
+                                ),
+                                _buildDetailRow(
+                                    "Effective Cost",
+                                    _calculateEffectiveCost(_selectedItem!).toStringAsFixed(2)
+                                ),
                                 _buildDetailRow("Quantity",
                                     _selectedItem!['qtyOnHand']?.toString() ?? 'N/A'),
                                 _buildDetailRow("Category",
                                     _selectedItem!['category']?.toString() ?? 'N/A'),
+                                if (_selectedItem!['isBOM'] == true) ...[
+                                  SizedBox(height: 16),
+                                  Text("Cost Breakdown:",
+                                      style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 16,
+                                          color: _primaryColor)),
+                                  SizedBox(height: 8),
+                                  Column(
+                                    children: _selectedItem!['components'].map<Widget>((component) {
+                                      return Padding(
+                                        padding: const EdgeInsets.symmetric(vertical: 4),
+                                        child: Row(
+                                          children: [
+                                            Expanded(
+                                              flex: 2,
+                                              child: Text(component['name'] ?? 'Unnamed component'),
+                                            ),
+                                            Expanded(
+                                              child: Text('${component['quantity']} ${component['unit']}'),
+                                            ),
+                                            Expanded(
+                                              child: Text('@ ${component['price']}'),
+                                            ),
+                                            Expanded(
+                                              child: Text(
+                                                '${(component['price'] * component['quantity']).toStringAsFixed(2)}',
+                                                textAlign: TextAlign.end,
+                                                style: TextStyle(fontWeight: FontWeight.bold),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                    }).toList(),
+                                  ),
+                                  Divider(),
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(vertical: 4),
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          flex: 3,
+                                          child: Text(
+                                            "Total Effective Cost:",
+                                            style: TextStyle(fontWeight: FontWeight.bold),
+                                          ),
+                                        ),
+                                        Expanded(
+                                          child: Text(
+                                            _calculateEffectiveCost(_selectedItem!).toStringAsFixed(2),
+                                            textAlign: TextAlign.end,
+                                            style: TextStyle(fontWeight: FontWeight.bold),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
                                 if (_selectedItem!['isBOM'] == true) ...[
                                   SizedBox(height: 16),
                                   Text("Components:",
@@ -594,17 +768,6 @@ class _ItemsListPageState extends State<ItemsListPage> {
                                 Row(
                                   mainAxisAlignment: MainAxisAlignment.end,
                                   children: [
-                                    ElevatedButton(
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: Colors.blue,
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                    ),
-                                    child: Text("Wastage",
-                                        style: TextStyle(color: Colors.white)),
-                                    onPressed: () => _navigateToWastageRecords(_selectedItem!),
-                                  ),
                                     SizedBox(width: 10),
                                     ElevatedButton(
                                       style: ElevatedButton.styleFrom(
@@ -695,15 +858,12 @@ class _ItemsListPageState extends State<ItemsListPage> {
           _buildStatCard("Stock Value",
           "₹${(double.parse(_selectedItem!['qtyOnHand'].toString()) * double.parse(_selectedItem!['salePrice'].toString()))}"),
           SizedBox(height: 10),
-          _buildStatCard("Profit Margin", "30%"), // Example value
+          _buildStatCard("Profit Margin", ""), // Empty string since we calculate inside
           ],
           ],
         ),
       ),
     ),
-
-
-
           ],
         ),
       ),
@@ -725,34 +885,169 @@ class _ItemsListPageState extends State<ItemsListPage> {
           ],
         ),
         padding: EdgeInsets.all(12),
-        height: 150,
+        height: 250, // Increased height for more details
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                Text("Recent Transactions",
-                    style: TextStyle(
-                        color: _primaryColor,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16
-                    )),
+                Text(
+                  "Purchase Reports",
+                  style: TextStyle(
+                    color: _primaryColor,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
                 Spacer(),
-                Icon(Icons.history, color: _secondaryColor),
+                IconButton(
+                  onPressed: _showPurchaseReport,
+                  icon: Icon(Icons.details, color: _secondaryColor),
+                )
               ],
             ),
             Divider(color: _primaryColor.withOpacity(0.3)),
             Expanded(
-              child: Center(
+              child: _isLoadingTransactions
+                  ? Center(child: CircularProgressIndicator())
+                  : _itemTransactions.isEmpty
+                  ? Center(
                 child: Text(
-                  "No recent transactions available",
+                  "No purchase records for this item",
                   style: TextStyle(color: _textColor.withOpacity(0.6)),
                 ),
+              )
+                  : ListView.builder(
+                itemCount: min(3, _itemTransactions.length),
+                itemBuilder: (context, index) {
+                  final txn = _itemTransactions[index];
+                  return Card(
+                    margin: EdgeInsets.symmetric(vertical: 4),
+                    child: ListTile(
+                      contentPadding: EdgeInsets.symmetric(horizontal: 8),
+                      leading: Icon(
+                        Icons.shopping_cart,
+                        color: Colors.green,
+                      ),
+                      title: Text(txn['vendor']),
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('${DateFormat('MMM dd, yyyy').format(DateTime.parse(txn['date']))}'),
+                          Text('Qty: ${txn['quantity']} @ ${txn['price']}'),
+                        ],
+                      ),
+                      trailing: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text('${txn['total'].toStringAsFixed(2)} PKR'),
+                          SizedBox(height: 4),
+                          Text(
+                            'View Details',
+                            style: TextStyle(
+                              color: Colors.blue,
+                              fontSize: 10,
+                            ),
+                          ),
+                        ],
+                      ),
+                      onTap: () => _showPurchaseDetails(txn),
+                    ),
+                  );
+                },
               ),
-            )
+            ),
           ],
         ),
       ),
+
+      // bottomNavigationBar: Container(
+      //   decoration: BoxDecoration(
+      //     color: _cardColor,
+      //     borderRadius: BorderRadius.only(
+      //       topLeft: Radius.circular(12),
+      //       topRight: Radius.circular(12),
+      //     ),
+      //     boxShadow: [
+      //       BoxShadow(
+      //         color: Colors.grey.withOpacity(0.2),
+      //         blurRadius: 8,
+      //         spreadRadius: 2,
+      //       )
+      //     ],
+      //   ),
+      //   padding: EdgeInsets.all(12),
+      //   height: 150,
+      //   child: Column(
+      //     crossAxisAlignment: CrossAxisAlignment.start,
+      //     children: [
+      //       Row(
+      //         children: [
+      //           Text(
+      //             "Recent Transactions",
+      //             style: TextStyle(
+      //               color: _primaryColor,
+      //               fontWeight: FontWeight.bold,
+      //               fontSize: 16,
+      //             ),
+      //           ),
+      //           Spacer(),
+      //           // Icon(Icons.history, color: _secondaryColor),
+      //           IconButton(onPressed: (){
+      //             _showAllTransactions(context);
+      //           }, icon: Icon(Icons.details,color: _secondaryColor,))
+      //         ],
+      //       ),
+      //       Divider(color: _primaryColor.withOpacity(0.3)),
+      //       Expanded(
+      //         child: _isLoadingTransactions
+      //             ? Center(child: CircularProgressIndicator())
+      //             : _itemTransactions.isEmpty
+      //             ? Center(
+      //           child: Text(
+      //             "No transactions for this item",
+      //             style: TextStyle(color: _textColor.withOpacity(0.6)),
+      //           ),
+      //         )
+      //             : ListView.builder(
+      //           itemCount: min(3, _itemTransactions.length), // Show max 3
+      //           itemBuilder: (context, index) {
+      //             final txn = _itemTransactions[index];
+      //             return ListTile(
+      //               contentPadding: EdgeInsets.zero,
+      //               leading: Icon(
+      //                 txn['type'] == 'Purchase'
+      //                     ? Icons.arrow_downward
+      //                     : Icons.arrow_upward,
+      //                 color: txn['type'] == 'Purchase'
+      //                     ? Colors.green
+      //                     : Colors.red,
+      //               ),
+      //               title: Text(
+      //                 '${txn['type']} - ${DateFormat('MMM dd').format(DateTime.parse(txn['date']))}',
+      //                 style: TextStyle(fontSize: 12),
+      //               ),
+      //               subtitle: Text(
+      //                 'Qty: ${txn['quantity']} @ ${txn['price']}',
+      //                 style: TextStyle(fontSize: 10),
+      //               ),
+      //               trailing: Text(
+      //                 '${txn['total'].toStringAsFixed(2)} PKR',
+      //                 style: TextStyle(
+      //                   fontWeight: FontWeight.bold,
+      //                   color: _primaryColor,
+      //                 ),
+      //               ),
+      //             );
+      //           },
+      //         ),
+      //       ),
+      //     ],
+      //   ),
+      // ),
+
+
 
       floatingActionButton: FloatingActionButton(
         backgroundColor: _primaryColor,
@@ -764,11 +1059,175 @@ class _ItemsListPageState extends State<ItemsListPage> {
           ).then((_) => fetchItems());
         },
       ),
-
-
-
     );
   }
+
+  void _showAllTransactions(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => Container(
+        height: MediaQuery.of(context).size.height * 0.8,
+        padding: EdgeInsets.all(16),
+        child: Column(
+          children: [
+            Text(
+              "All Transactions for ${_selectedItem?['itemName']}",
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            SizedBox(height: 10),
+            Expanded(
+              child: ListView.builder(
+                itemCount: _itemTransactions.length,
+                itemBuilder: (context, index) {
+                  final txn = _itemTransactions[index];
+                  return Card(
+                    child: ListTile(
+                      title: Text(txn['type']),
+                      subtitle: Text(
+                        '${txn['quantity']} units on ${DateFormat.yMMMd().format(DateTime.parse(txn['date']))}',
+                      ),
+                      trailing: Text('${txn['total'].toStringAsFixed(2)} PKR'),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  double _calculateEffectiveCost(Map<String, dynamic> item) {
+    if (item['isBOM'] == true && item['components'] != null) {
+      // Calculate sum of all component costs
+      double totalCost = 0.0;
+      for (var component in item['components']) {
+        double quantity = double.tryParse(component['quantity'].toString()) ?? 0;
+        double price = double.tryParse(component['price'].toString()) ?? 0;
+        totalCost += quantity * price;
+      }
+      return totalCost;
+    } else {
+      // For regular items, just return the cost price
+      return double.tryParse(item['costPrice']?.toString() ?? '0') ?? 0;
+    }
+  }
+
+  void _showPurchaseDetails(Map<String, dynamic> purchase) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text("Purchase Details"),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildPurchaseDetailRow("Date", DateFormat.yMMMd().add_jm().format(DateTime.parse(purchase['date']))),
+              _buildPurchaseDetailRow("Vendor", purchase['vendor']),
+              _buildPurchaseDetailRow("Item", _selectedItem?['itemName'] ?? ''),
+              _buildPurchaseDetailRow("Quantity", purchase['quantity'].toString()),
+              _buildPurchaseDetailRow("Price", purchase['price'].toString()),
+              _buildPurchaseDetailRow("Total", '${purchase['total'].toStringAsFixed(2)} PKR'),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text("Close"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPurchaseDetailRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 80,
+            child: Text(
+              "$label:",
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          SizedBox(width: 10),
+          Expanded(child: Text(value)),
+        ],
+      ),
+    );
+  }
+
+  void _showPurchaseReport() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => Container(
+        height: MediaQuery.of(context).size.height * 0.8,
+        padding: EdgeInsets.all(16),
+        child: Column(
+          children: [
+            Text(
+              "Purchase Report: ${_selectedItem?['itemName']}",
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            SizedBox(height: 10),
+            Expanded(
+              child: ListView.builder(
+                itemCount: _itemTransactions.length,
+                itemBuilder: (context, index) {
+                  final txn = _itemTransactions[index];
+                  return Card(
+                    margin: EdgeInsets.symmetric(vertical: 4),
+                    child: ListTile(
+                      contentPadding: EdgeInsets.symmetric(horizontal: 12),
+                      leading: Icon(Icons.shopping_cart, color: Colors.green),
+                      title: Text(txn['vendor']),
+                      subtitle: Text(DateFormat.yMMMd().add_jm().format(DateTime.parse(txn['date']))),
+                      trailing: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text('${txn['quantity']} @ ${txn['price']}'),
+                          Text('${txn['total'].toStringAsFixed(2)} PKR'),
+                        ],
+                      ),
+                      onTap: () => _showPurchaseDetails(txn),
+                    ),
+                  );
+                },
+              ),
+            ),
+            Divider(),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  "Total Purchases:",
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  "${_calculateTotalPurchases().toStringAsFixed(2)} PKR",
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  double _calculateTotalPurchases() {
+    return _itemTransactions.fold(0.0, (sum, txn) => sum + (txn['total'] as double));
+  }
+
 
   void _showImagePreview(BuildContext context, String imageBase64) {
     showDialog(
@@ -801,6 +1260,58 @@ class _ItemsListPageState extends State<ItemsListPage> {
   }
 
   Widget _buildStatCard(String title, String value) {
+    // Calculate profit margin if this is the profit margin card
+    if (title == "Profit Margin" && _selectedItem != null) {
+      // final costPrice = double.tryParse(_selectedItem!['costPrice']?.toString() ?? '0') ?? 0;
+      // final salePrice = double.tryParse(_selectedItem!['salePrice']?.toString() ?? '0') ?? 0;
+      //
+      // double margin = 0;
+      // if (costPrice > 0) {
+      //   margin = ((salePrice - costPrice) / costPrice) * 100;
+      // }
+      //
+      // value = '${margin.toStringAsFixed(1)}%';
+      final effectiveCost = _calculateEffectiveCost(_selectedItem!);
+      final salePrice = double.tryParse(_selectedItem!['salePrice']?.toString() ?? '0') ?? 0;
+
+      double margin = 0;
+      if (effectiveCost > 0) {
+        margin = ((salePrice - effectiveCost) / effectiveCost) * 100;
+      }
+
+      value = '${margin.toStringAsFixed(1)}%';
+
+      // Change color based on profitability
+      Color textColor = margin >= 0 ? Colors.green : Colors.red;
+
+      return Card(
+        elevation: 2,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Padding(
+          padding: EdgeInsets.all(12),
+          child: Column(
+            children: [
+              Text(title,
+                  style: TextStyle(
+                      color: _textColor.withOpacity(0.7),
+                      fontSize: 14
+                  )),
+              SizedBox(height: 5),
+              Text(value,
+                  style: TextStyle(
+                      color: textColor,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 18
+                  )),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // Default card for other stats
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(
@@ -851,19 +1362,6 @@ class _ItemsListPageState extends State<ItemsListPage> {
                 )),
           ),
         ],
-      ),
-    );
-  }
-
-
-  void _navigateToWastageRecords(Map<String, dynamic> item) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => WastageRecordsPage(
-          itemKey: item['key'],
-          itemName: item['itemName'],
-        ),
       ),
     );
   }
